@@ -123,7 +123,8 @@ resource "aws_iam_role_policy" "ecs_execution_secrets" {
         Action = ["secretsmanager:GetSecretValue"]
         Resource = [
           aws_db_instance.postgres.master_user_secret[0].secret_arn,
-          aws_secretsmanager_secret.identity_hash.arn
+          aws_secretsmanager_secret.identity_hash.arn,
+          aws_secretsmanager_secret.reunification_lookup.arn
         ]
       },
       {
@@ -258,6 +259,8 @@ resource "aws_ecs_task_definition" "api" {
       { name = "SYNC_MAX_CIPHERTEXT_BYTES", value = tostring(var.sync_max_ciphertext_bytes) },
       { name = "SYNC_MAX_BATCH_SIZE", value = tostring(var.sync_max_batch_size) },
       { name = "SYNC_BATCH_REQUESTS_PER_MINUTE", value = tostring(var.sync_batch_requests_per_minute) },
+      { name = "REUNIFICATION_LOOKUP_KEY_VERSION", value = tostring(var.reunification_lookup_key_version) },
+      { name = "REUNIFICATION_REQUEST_TTL_DAYS", value = tostring(var.reunification_request_ttl_days) },
       { name = "JOBS_QUEUE_URL", value = aws_sqs_queue.jobs.url },
       { name = "WEB_ORIGIN", value = var.domain_name != "" ? "https://${var.domain_name}" : "" },
       { name = "ALLOW_LEGACY_COMMAND_TOKEN", value = "false" },
@@ -269,19 +272,28 @@ resource "aws_ecs_task_definition" "api" {
       { name = "FEATURE_WHATSAPP", value = tostring(var.feature_whatsapp) },
       { name = "FEATURE_WEBRTC_RELAY", value = tostring(var.feature_webrtc_relay) },
       { name = "FEATURE_OPERATIONAL_LAYERS", value = tostring(var.feature_operational_layers) },
-      { name = "FEATURE_SECURE_ENVELOPE", value = tostring(var.feature_secure_envelope) }
+      { name = "FEATURE_SECURE_ENVELOPE", value = tostring(var.feature_secure_envelope) },
+      { name = "FEATURE_REUNIFICATION", value = tostring(var.feature_reunification) }
     ]
 
-    secrets = [
-      {
-        name      = "DB_PASSWORD"
-        valueFrom = "${aws_db_instance.postgres.master_user_secret[0].secret_arn}:password::"
-      },
-      {
-        name      = "IDENTITY_HASH_SECRET"
-        valueFrom = aws_secretsmanager_secret.identity_hash.arn
-      }
-    ]
+    secrets = concat(
+      [
+        {
+          name      = "DB_PASSWORD"
+          valueFrom = "${aws_db_instance.postgres.master_user_secret[0].secret_arn}:password::"
+        },
+        {
+          name      = "IDENTITY_HASH_SECRET"
+          valueFrom = aws_secretsmanager_secret.identity_hash.arn
+        }
+      ],
+      var.feature_reunification ? [
+        {
+          name      = "REUNIFICATION_LOOKUP_SECRET_B64URL"
+          valueFrom = aws_secretsmanager_secret.reunification_lookup.arn
+        }
+      ] : []
+    )
 
     logConfiguration = {
       logDriver = "awslogs"
