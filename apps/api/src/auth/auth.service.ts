@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, ServiceUnavailableException, TooManyRequestsException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import {
   CognitoIdentityProviderClient,
   AdminGetUserCommand,
@@ -38,7 +38,7 @@ export class AuthService {
   private async rateLimit(key: string, max: number, ttlSeconds: number) {
     const value = await this.redis.incr(key);
     if (value === 1) await this.redis.expire(key, ttlSeconds);
-    if (value > max) throw new TooManyRequestsException('Demasiados intentos. Intenta nuevamente más tarde.');
+    if (value > max) throw new HttpException('Demasiados intentos. Intenta nuevamente más tarde.', HttpStatus.TOO_MANY_REQUESTS);
   }
 
   private async ensureOfficialPreauthorized(phone: string) {
