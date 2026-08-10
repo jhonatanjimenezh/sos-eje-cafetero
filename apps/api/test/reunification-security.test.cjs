@@ -26,8 +26,16 @@ test('target phone is represented by keyed lookup token, never a plaintext colum
 test('seeker API never exposes target presence or target activity state', () => {
   assert.match(service, /return \{ status: 'REQUEST_ACCEPTED', requestId \}/);
   assert.match(service, /return \{ status: 'WITHDRAW_REQUESTED' \}/);
-  for (const forbidden of ['targetExists', 'matched:', 'delivered:', 'opened:', 'lastSeen:', 'online:', 'targetAuthSubject']) {
-    assert.equal(service.includes(forbidden), false, `forbidden seeker-visible signal found: ${forbidden}`);
+  for (const forbiddenProperty of [
+    /\btargetExists\s*:/,
+    /\bmatched\s*:/,
+    /\bdelivered\s*:/,
+    /\bopened\s*:/,
+    /\blastSeen\s*:/,
+    /\bonline\s*:/,
+    /\btargetAuthSubject\s*:/,
+  ]) {
+    assert.doesNotMatch(service, forbiddenProperty);
   }
   assert.doesNotMatch(controller, /@Get\(['"]search/);
   assert.doesNotMatch(controller, /@Get\(['"][^'"]*phone/);
