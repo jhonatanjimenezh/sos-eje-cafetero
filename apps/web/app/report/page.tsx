@@ -2,9 +2,14 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { countOutbox, IncidentPayload } from '../../lib/offline-db';
-import { submitIncidentResilient, syncPendingIncidents } from '../../lib/offline-sync';
+import {
+  submitIncidentOnlineOnly,
+  submitIncidentResilient,
+  syncPendingIncidents,
+} from '../../lib/offline-sync';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+const OFFLINE_QUEUE_ENABLED = process.env.NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE === 'true';
 
 type Location = { lat: number; lng: number };
 
@@ -13,7 +18,7 @@ type SyncRegistration = ServiceWorkerRegistration & {
 };
 
 async function requestBackgroundSync() {
-  if (!('serviceWorker' in navigator)) return;
+  if (!OFFLINE_QUEUE_ENABLED || !('serviceWorker' in navigator)) return;
   try {
     const registration = (await navigator.serviceWorker.ready) as SyncRegistration;
     await registration.sync?.register('sos-outbox');
@@ -31,6 +36,10 @@ export default function Report() {
   const [online, setOnline] = useState(true);
 
   const refreshPending = async () => {
+    if (!OFFLINE_QUEUE_ENABLED) {
+      setPending(0);
+      return;
+    }
     try {
       setPending(await countOutbox());
     } catch {
@@ -51,11 +60,12 @@ export default function Report() {
 
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
-    window.addEventListener('sos-outbox-changed', onOutboxChanged);
+    if (OFFLINE_QUEUE_ENABLED) window.addEventListener('sos-outbox-changed', onOutboxChanged);
+
     return () => {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
-      window.removeEventListener('sos-outbox-changed', onOutboxChanged);
+      if (OFFLINE_QUEUE_ENABLED) window.removeEventListener('sos-outbox-changed', onOutboxChanged);
     };
   }, []);
 
@@ -89,27 +99,39 @@ export default function Report() {
     };
 
     try {
-      const result = await submitIncidentResilient(payload, API);
+      const result = OFFLINE_QUEUE_ENABLED
+        ? await submitIncidentResilient(payload, API)
+        : await submitIncidentOnlineOnly(payload, API);
+
       if (result.status === 'SENT') {
         setMsg(
           `✅ Reporte ${result.publicId ?? ''} registrado${result.potentialDuplicate ? ' · El sistema detectó otro reporte cercano y será revisado.' : ''}`,
         );
+        form.reset();
+        setLoc(null);
       } else {
         setMsg(
-          '📴 No hay conexión estable. El reporte quedó guardado de forma segura en este dispositivo y se sincronizará al recuperar Internet.',
+          '📴 No hay conexión estable. El reporte quedó almacenado localmente para sincronizarse al recuperar Internet.',
         );
         await requestBackgroundSync();
+        form.reset();
+        setLoc(null);
       }
-      form.reset();
       await refreshPending();
     } catch (error) {
-      setMsg(`No se pudo guardar el reporte: ${error instanceof Error ? error.message : 'error desconocido'}`);
+      const detail = error instanceof Error ? error.message : 'error desconocido';
+      setMsg(
+        OFFLINE_QUEUE_ENABLED
+          ? `No se pudo guardar el reporte: ${detail}`
+          : `⚠️ ${detail} Mantén este formulario abierto y vuelve a pulsar Enviar cuando regrese la conexión.`,
+      );
     } finally {
       setBusy(false);
     }
   }
 
   async function syncNow() {
+    if (!OFFLINE_QUEUE_ENABLED) return;
     if (!navigator.onLine) {
       setMsg('📴 Sigues sin conexión. Los reportes permanecerán guardados en este dispositivo.');
       return;
@@ -135,6 +157,12 @@ export default function Report() {
     }
   }
 
+  const connectionLabel = online
+    ? '🟢 con conexión'
+    : OFFLINE_QUEUE_ENABLED
+      ? '🟡 sin conexión · cola offline habilitada'
+      : '🟠 sin conexión · modo seguro sin persistencia sensible';
+
   return (
     <main className="wrap">
       <div className="card">
@@ -142,11 +170,18 @@ export default function Report() {
         <p>Comparte primero tu ubicación GPS. No necesitas crear una cuenta.</p>
 
         <p className="muted">
-          Estado: {online ? '🟢 con conexión' : '🟡 sin conexión · modo offline activo'}
-          {pending > 0 ? ` · ${pending} reporte(s) guardados en este dispositivo` : ''}
+          Estado: {connectionLabel}
+          {pending > 0 ? ` · ${pending} reporte(s) pendientes en este dispositivo` : ''}
         </p>
 
-        {pending > 0 && (
+        {!OFFLINE_QUEUE_ENABLED && !online && (
+          <p className="alert">
+            Por seguridad, esta versión no guarda GPS, teléfono ni descripción en el dispositivo cuando no hay Internet.
+            El formulario permanecerá aquí para que puedas reintentar cuando vuelva la conexión.
+          </p>
+        )}
+
+        {OFFLINE_QUEUE_ENABLED && pending > 0 && (
           <button className="btn" type="button" disabled={syncing || !online} onClick={syncNow}>
             {syncing ? 'Sincronizando…' : '↻ Sincronizar ahora'}
           </button>
@@ -203,7 +238,13 @@ export default function Report() {
           <input name="contactPhone" inputMode="tel" />
 
           <button disabled={busy} className="btn danger" type="submit">
-            {busy ? 'Guardando…' : online ? 'Enviar reporte' : 'Guardar reporte offline'}
+            {busy
+              ? 'Enviando…'
+              : online
+                ? 'Enviar reporte'
+                : OFFLINE_QUEUE_ENABLED
+                  ? 'Guardar reporte offline'
+                  : 'Reintentar envío'}
           </button>
         </form>
 
