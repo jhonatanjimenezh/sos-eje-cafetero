@@ -12,8 +12,8 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 log = logging.getLogger("evidence-scanner")
 
 ENDPOINT = os.getenv("S3_ENDPOINT", "http://minio:9000")
-ACCESS_KEY = os.environ["MINIO_ROOT_USER"]
-SECRET_KEY = os.environ["MINIO_ROOT_PASSWORD"]
+ACCESS_KEY = os.environ["S3_SCANNER_ACCESS_KEY"]
+SECRET_KEY = os.environ["S3_SCANNER_SECRET_KEY"]
 BUCKET = os.getenv("PRIVATE_EVIDENCE_BUCKET", "sos-private-evidence")
 PREFIX = os.getenv("EVIDENCE_SCAN_PREFIX", "private/affected/")
 CLAMAV_HOST = os.getenv("CLAMAV_HOST", "clamav")
