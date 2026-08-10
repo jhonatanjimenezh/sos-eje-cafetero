@@ -109,8 +109,11 @@ async function verifyReceipt(cfg, receipt, envelope) {
 }
 
 function mutateBase64url(value) {
-  const replacement = value.endsWith('A') ? 'B' : 'A';
-  return `${value.slice(0, -1)}${replacement}`;
+  const bytes = fromB64url(value);
+  if (!bytes.length) throw new Error('cannot mutate empty base64url value');
+  const index = Math.floor(bytes.length / 2);
+  bytes[index] ^= 0x01;
+  return b64url(bytes);
 }
 
 const cfg = await config();
