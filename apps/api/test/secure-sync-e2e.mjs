@@ -128,9 +128,21 @@ async function incidentCount(db, envelope) {
   return r.rows[0].count;
 }
 
+async function syncStateCount(db, envelope) {
+  const r = await db.query(`SELECT count(*)::int count FROM secure_sync_messages
+    WHERE emitter_key_id=$1 AND message_id=$2`, [envelope.emitterKeyId, envelope.messageId]);
+  return r.rows[0].count;
+}
+
 async function assertNoIncident(db, envelope) {
   const count = await incidentCount(db, envelope);
   if (count !== 0) throw new Error(`rejected envelope ${envelope.emitterKeyId}:${envelope.messageId} created a domain entity`);
+}
+
+async function assertNoDurableNamespace(db, envelope) {
+  if (await syncStateCount(db, envelope) !== 0) {
+    throw new Error(`unauthenticated rejection reserved namespace ${envelope.emitterKeyId}:${envelope.messageId}`);
+  }
 }
 
 const cfg = await config();
@@ -184,7 +196,8 @@ try {
     throw new Error(`pre-auth poisoned copy not rejected: ${JSON.stringify(poisonedResult.receipts[0])}`);
   }
   await verifyReceipt(cfg, poisonedResult.receipts[0], poisonedCiphertext);
-  if (await assertNoIncident(db, poisonedCiphertext), false) throw new Error('unreachable');
+  await assertNoIncident(db, poisonedCiphertext);
+  await assertNoDurableNamespace(db, poisonedCiphertext);
   const recoveredOriginal = await post([poisonBase]);
   if (recoveredOriginal.receipts[0].status !== 'ACCEPTED') {
     throw new Error(`hostile relay poisoned legitimate namespace: ${JSON.stringify(recoveredOriginal.receipts[0])}`);
@@ -199,6 +212,7 @@ try {
     throw new Error(`ciphertext tampering not rejected correctly: ${JSON.stringify(digestResult.receipts[0])}`);
   }
   await verifyReceipt(cfg, digestResult.receipts[0], digestTampered);
+  await assertNoDurableNamespace(db, digestTampered);
 
   const signatureBase = await makeEnvelope(cfg, emitter, 'signature-tamper');
   const signatureTampered = { ...signatureBase, signature: mutateBase64url(signatureBase.signature) };
@@ -206,6 +220,7 @@ try {
   if (signatureResult.receipts[0].status !== 'REJECTED' || signatureResult.receipts[0].reasonCode !== 'SIGNATURE_INVALID') {
     throw new Error(`signature tampering not rejected correctly: ${JSON.stringify(signatureResult.receipts[0])}`);
   }
+  await assertNoDurableNamespace(db, signatureTampered);
 
   const signatureRecovered = await post([signatureBase]);
   if (signatureRecovered.receipts[0].status !== 'ACCEPTED') throw new Error('signature-tampered relay copy poisoned original');
@@ -223,6 +238,7 @@ try {
   }
   await verifyReceipt(cfg, mixedAccepted, mixedValid);
   await verifyReceipt(cfg, mixedRejected, headerTampered);
+  await assertNoDurableNamespace(db, headerTampered);
 
   // Simula teléfono perdido/robado: una key revocada puede producir criptografía válida,
   // pero el servidor debe negar nuevos envelopes de esa procedencia.
