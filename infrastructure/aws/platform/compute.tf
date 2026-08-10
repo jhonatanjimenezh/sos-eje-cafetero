@@ -49,7 +49,7 @@ resource "aws_lb_target_group" "api" {
     protocol            = "HTTP"
     matcher             = "200"
     interval            = 15
-    timeout              = 5
+    timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 3
   }
@@ -363,7 +363,7 @@ resource "aws_appautoscaling_policy" "api_memory" {
   name               = "${local.name}-api-memory"
   policy_type        = "TargetTrackingScaling"
   resource_id        = aws_appautoscaling_target.api.resource_id
-  scalable_dimension = aws_appautoscaling_target.scalable_dimension
+  scalable_dimension = aws_appautoscaling_target.api.scalable_dimension
   service_namespace  = aws_appautoscaling_target.api.service_namespace
 
   target_tracking_scaling_policy_configuration {
