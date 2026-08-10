@@ -57,7 +57,7 @@ export class AssistanceService {
 
   async commandMatches() {
     const r = await this.db.query(`SELECT m.id,m.status,m.score,m.distance_meters,n.public_id need_public_id,n.category,n.quantity,n.unit,
-      p.public_id affected_public_id,p.full_name,o.public_id offer_public_id,o.provider_name,o.quantity_available,o.phone_e164 offer_phone,
+      p.public_id affected_public_id,p.full_name,p.verification_status,o.public_id offer_public_id,o.provider_name,o.quantity_available,o.phone_e164 offer_phone,
       ST_Y(p.location::geometry) affected_lat,ST_X(p.location::geometry) affected_lng,
       ST_Y(o.location::geometry) offer_lat,ST_X(o.location::geometry) offer_lng
       FROM assistance_matches m JOIN assistance_needs n ON n.id=m.need_id JOIN affected_profiles p ON p.id=n.affected_profile_id
@@ -67,11 +67,40 @@ export class AssistanceService {
 
   async approveMatch(id: string, official: any) {
     if (!['COORDINATOR','DISPATCHER','ADMIN'].includes(official.role)) throw new ForbiddenException('Rol insuficiente para aprobar matches');
-    const r = await this.db.query(`UPDATE assistance_matches SET status='APPROVED',approved_by_official_id=$2,approved_at=now()
-      WHERE id=$1 AND status='PROPOSED' RETURNING need_id,offer_id`, [id,official.id]);
-    if (!r.rowCount) throw new NotFoundException('Match no encontrado o ya procesado');
-    await this.db.query(`UPDATE assistance_needs SET status='MATCHED',updated_at=now() WHERE id=$1`, [r.rows[0].need_id]);
-    await this.db.query(`INSERT INTO audit_events(actor_official_id,action,entity_type,entity_id) VALUES($1,'ASSISTANCE_MATCH_APPROVED','assistance_match',$2)`, [official.id,id]);
-    return { status:'APPROVED' };
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const r = await client.query(`UPDATE assistance_matches m
+        SET status='APPROVED',approved_by_official_id=$2,approved_at=now()
+        FROM assistance_needs n, affected_profiles p
+        WHERE m.id=$1
+          AND m.status='PROPOSED'
+          AND n.id=m.need_id
+          AND p.id=n.affected_profile_id
+          AND p.verification_status='VERIFIED'
+        RETURNING m.need_id,m.offer_id`, [id,official.id]);
+      if (!r.rowCount) {
+        const exists = await client.query(`SELECT m.id,p.verification_status
+          FROM assistance_matches m
+          JOIN assistance_needs n ON n.id=m.need_id
+          JOIN affected_profiles p ON p.id=n.affected_profile_id
+          WHERE m.id=$1`, [id]);
+        if (exists.rowCount && exists.rows[0].verification_status !== 'VERIFIED') {
+          throw new ForbiddenException('No se puede aprobar ayuda para un expediente cuya identidad no esté VERIFIED');
+        }
+        throw new NotFoundException('Match no encontrado o ya procesado');
+      }
+      await client.query(`UPDATE assistance_needs SET status='MATCHED',updated_at=now() WHERE id=$1`, [r.rows[0].need_id]);
+      await client.query(`INSERT INTO audit_events(actor_subject,actor_official_id,action,entity_type,entity_id,metadata)
+        VALUES($1,$2,'ASSISTANCE_MATCH_APPROVED','assistance_match',$3,$4::jsonb)`,
+        [official.auth_subject??null,official.id,id,JSON.stringify({ identityStatus: 'VERIFIED' })]);
+      await client.query('COMMIT');
+      return { status:'APPROVED' };
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 }
