@@ -28,10 +28,11 @@ async function makeEmitter() {
   return { pair, spki, keyId: await sha(spki) };
 }
 
-async function makeEnvelope(cfg, emitter, suffix) {
-  const messageId = crypto.randomUUID();
-  const createdAt = new Date();
-  const expiresAt = new Date(createdAt.getTime() + 3600_000);
+async function makeEnvelope(cfg, emitter, suffix, options = {}) {
+  const messageId = options.messageId ?? crypto.randomUUID();
+  const createdAt = options.createdAt ? new Date(options.createdAt) : new Date();
+  const ttlMs = options.ttlMs ?? 3600_000;
+  const expiresAt = new Date(createdAt.getTime() + ttlMs);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const serverPublic = await crypto.subtle.importKey(
     'spki', fromB64url(cfg.encryptionPublicKeySpki), { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt'],
@@ -116,6 +117,12 @@ function mutateBase64url(value) {
   return b64url(bytes);
 }
 
+async function assertNoIncident(db, envelope) {
+  const r = await db.query(`SELECT count(*)::int count FROM incidents
+    WHERE source='SECURE_RELAY' AND source_idempotency_key=$1`, [`secure:${envelope.messageId}`]);
+  if (r.rows[0].count !== 0) throw new Error(`rejected envelope ${envelope.messageId} created a domain entity`);
+}
+
 const cfg = await config();
 if (cfg.cryptoSuite !== CRYPTO_SUITE) throw new Error(`suite mismatch: ${cfg.cryptoSuite}`);
 const emitter = await makeEmitter();
@@ -137,6 +144,18 @@ try {
   const count = await db.query(`SELECT count(*)::int count FROM incidents
     WHERE source='SECURE_RELAY' AND source_idempotency_key=$1`, [`secure:${valid.messageId}`]);
   if (count.rows[0].count !== 1) throw new Error(`10 deliveries created ${count.rows[0].count} incidents`);
+
+  // Un atacante puede crear otro envelope criptográficamente válido usando el mismo UUID.
+  // El servidor debe detectar que el digest no es el originalmente aceptado y no sustituirlo.
+  const replacement = await makeEnvelope(cfg, emitter, 'message-id-replacement', { messageId: valid.messageId });
+  const replacementResult = await post([replacement]);
+  if (replacementResult.receipts[0].status !== 'REJECTED' || replacementResult.receipts[0].reasonCode !== 'MESSAGE_ID_DIGEST_CONFLICT') {
+    throw new Error(`message replacement attack not rejected: ${JSON.stringify(replacementResult.receipts[0])}`);
+  }
+  await verifyReceipt(cfg, replacementResult.receipts[0], replacement);
+  const countAfterReplacement = await db.query(`SELECT count(*)::int count FROM incidents
+    WHERE source='SECURE_RELAY' AND source_idempotency_key=$1`, [`secure:${valid.messageId}`]);
+  if (countAfterReplacement.rows[0].count !== 1) throw new Error('message replacement changed domain cardinality');
 
   const digestTamperBase = await makeEnvelope(cfg, emitter, 'digest-tamper');
   const digestTampered = { ...digestTamperBase, ciphertext: mutateBase64url(digestTamperBase.ciphertext) };
@@ -166,13 +185,23 @@ try {
   await verifyReceipt(cfg, mixedAccepted, mixedValid);
   await verifyReceipt(cfg, mixedRejected, headerTampered);
 
-  for (const rejected of [digestTampered, signatureTampered, headerTampered]) {
-    const r = await db.query(`SELECT count(*)::int count FROM incidents
-      WHERE source='SECURE_RELAY' AND source_idempotency_key=$1`, [`secure:${rejected.messageId}`]);
-    if (r.rows[0].count !== 0) throw new Error(`rejected envelope ${rejected.messageId} created a domain entity`);
+  // Simula teléfono perdido/robado: una key revocada puede producir criptografía válida,
+  // pero el servidor debe negar nuevos envelopes de esa procedencia.
+  const revokedEmitter = await makeEmitter();
+  await db.query(`INSERT INTO secure_device_keys(emitter_key_id,public_key_spki_sha256,revoked_at,revocation_reason)
+    VALUES($1,$1,now(),'synthetic lost device test')`, [revokedEmitter.keyId]);
+  const revokedEnvelope = await makeEnvelope(cfg, revokedEmitter, 'revoked-device');
+  const revokedResult = await post([revokedEnvelope]);
+  if (revokedResult.receipts[0].status !== 'REJECTED' || revokedResult.receipts[0].reasonCode !== 'EMITTER_KEY_REVOKED') {
+    throw new Error(`revoked emitter was not rejected: ${JSON.stringify(revokedResult.receipts[0])}`);
+  }
+  await verifyReceipt(cfg, revokedResult.receipts[0], revokedEnvelope);
+
+  for (const rejected of [digestTampered, signatureTampered, headerTampered, revokedEnvelope]) {
+    await assertNoIncident(db, rejected);
   }
 
-  console.log('secure sync E2E passed: encryption, signatures, replay, tampering, mixed batch, signed receipts');
+  console.log('secure sync E2E passed: encryption, signatures, replay, replacement conflict, tampering, revocation, mixed batch, signed receipts');
 } finally {
   await db.end();
 }
