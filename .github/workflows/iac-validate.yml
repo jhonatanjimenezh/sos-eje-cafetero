@@ -28,7 +28,7 @@ jobs:
         with:
           terraform_version: '1.15.8'
       - name: Terraform format
-        run: terraform fmt -check -recursive infrastructure/aws
+        run: terraform fmt -check -diff -recursive infrastructure/aws
       - name: Validate bootstrap
         working-directory: infrastructure/aws/bootstrap
         run: |
