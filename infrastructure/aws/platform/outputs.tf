@@ -75,6 +75,22 @@ output "liveness_provider" {
   value = upper(var.liveness_provider)
 }
 
+output "feature_secure_envelope" {
+  value = var.feature_secure_envelope
+}
+
+output "feature_webrtc_relay" {
+  value = var.feature_webrtc_relay
+}
+
+output "sync_encryption_key_id" {
+  value = aws_kms_key.sync_encryption.key_id
+}
+
+output "sync_receipt_signing_key_id" {
+  value = aws_kms_key.sync_receipt_signing.key_id
+}
+
 output "guardduty_malware_protection_enabled" {
   value = var.enable_guardduty_malware_protection
 }
