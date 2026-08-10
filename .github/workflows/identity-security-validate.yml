@@ -51,6 +51,10 @@ jobs:
         env:
           DATABASE_URL: postgresql://sos:test-only-password@localhost:5432/sos
         run: pnpm --filter @sos/api migrate
+      - name: Verified-only assistance database invariant
+        env:
+          DATABASE_URL: postgresql://sos:test-only-password@localhost:5432/sos
+        run: node apps/api/test/verified-assistance-db.mjs
       - name: Typecheck API
         run: pnpm --filter @sos/api lint
       - name: Build API
