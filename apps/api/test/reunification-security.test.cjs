@@ -9,6 +9,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const migration = read('apps/api/migrations/006_safe_reunification.sql');
 const service = read('apps/api/src/reunification/reunification.service.ts');
 const controller = read('apps/api/src/reunification/reunification.controller.ts');
+const originGuard = read('apps/api/src/reunification/reunification-origin.guard.ts');
 const reunificationDto = read('apps/api/src/reunification/dto.ts');
 const authService = read('apps/api/src/auth/auth.service.ts');
 const authDto = read('apps/api/src/auth/dto.ts');
@@ -41,6 +42,18 @@ test('seeker API never exposes target presence or target activity state', () => 
   assert.doesNotMatch(controller, /@Get\(['"][^'"]*phone/);
 });
 
+test('target-private actions never mutate seeker-observable request lifecycle', () => {
+  assert.doesNotMatch(migration, /status IN \([^)]*BLOCKED_BY_TARGET/s);
+  assert.doesNotMatch(migration, /status IN \([^)]*ABUSE_REVIEW/s);
+  assert.doesNotMatch(service, /SET\s+status='BLOCKED_BY_TARGET'/);
+  assert.doesNotMatch(service, /SET\s+status='ABUSE_REVIEW'/);
+  assert.match(service, /reunification_target_actions/);
+  assert.match(service, /reunification_blocks/);
+  assert.match(service, /REUNIFICATION_SEEKER_BLOCKED/);
+  assert.match(service, /REUNIFICATION_ABUSE_REPORTED/);
+  assert.equal(service.includes('notifySeeker'), false);
+});
+
 test('target contact is explicit reveal, not included in inbox listing', () => {
   assert.match(service, /ReunificationTargetAction\.REVEAL_CONTACT/);
   assert.match(service, /contactPhone: seeker\.rows\[0\]\.phone_e164/);
@@ -55,12 +68,12 @@ test('free text cannot bypass verified contact reveal', () => {
   assert.match(reunificationDto, /@Matches\(NO_DIRECT_CONTACT/);
 });
 
-test('block and abuse decisions are one-way and never notify seeker', () => {
-  assert.match(migration, /reunification_blocks/);
-  assert.match(service, /REUNIFICATION_SEEKER_BLOCKED/);
-  assert.match(service, /REUNIFICATION_ABUSE_REPORTED/);
-  assert.match(service, /status='ABUSE_REVIEW'/);
-  assert.equal(service.includes('notifySeeker'), false);
+test('cookie-authenticated mutations require exact configured browser origin', () => {
+  assert.match(controller, /@UseGuards\(JwtAuthGuard, ReunificationOriginGuard\)/);
+  assert.match(originGuard, /WEB_ORIGIN/);
+  assert.match(originGuard, /allowed\.includes\(origin\)/);
+  assert.match(originGuard, /\^Bearer\\s\+\\S\+\$/);
+  assert.match(originGuard, /Origen no autorizado/);
 });
 
 test('citizen OTP uses opaque challenge and does not expose account lifecycle flow', () => {
