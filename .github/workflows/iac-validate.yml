@@ -49,7 +49,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate root Compose
-        run: docker compose --env-file .env.example config >/dev/null
+        run: |
+          cp .env.example .env
+          docker compose --env-file .env config >/dev/null
       - name: Validate on-prem Compose
         working-directory: infrastructure/onprem
         run: |
