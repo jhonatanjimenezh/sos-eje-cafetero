@@ -12,6 +12,7 @@ import { AffectedModule } from './affected/affected.module';
 import { AssistanceModule } from './assistance/assistance.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { SyncModule } from './sync/sync.module';
+import { ReunificationModule } from './reunification/reunification.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { SyncModule } from './sync/sync.module';
     AssistanceModule,
     AnalyticsModule,
     SyncModule,
+    ReunificationModule,
   ],
   controllers: [HealthController],
 })
