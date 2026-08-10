@@ -6,7 +6,7 @@ Este documento define cuándo una versión puede exponerse a usuarios reales. El
 
 Una capacidad incompleta no debe bloquear todo el sistema si puede desactivarse de forma segura.
 
-Por ejemplo, el reporte SOS online puede operar aunque Face Liveness o WebRTC relay aún no estén terminados. En cambio, ninguna capacidad debe activarse si expone datos sensibles, puede duplicar incidentes o no tiene un rollback claro.
+Por ejemplo, el reporte SOS online puede operar aunque Face Liveness, WebRTC relay o reencuentro aún no estén terminados. En cambio, ninguna capacidad debe activarse si expone datos sensibles, puede duplicar incidentes o no tiene un rollback claro.
 
 ---
 
@@ -23,7 +23,8 @@ Permitido:
 - PWA/IndexedDB;
 - simulación de unidades;
 - matching con datos ficticios;
-- pruebas offline.
+- pruebas offline;
+- reencuentro únicamente con teléfonos sintéticos/controlados.
 
 No permitido:
 - PII real;
@@ -75,6 +76,20 @@ B. desactivar temporalmente persistencia offline de payload sensible mediante fe
 - ninguna cuenta genérica compartida.
 - auditoría de acciones operacionales.
 
+#### Reencuentro, si está habilitado
+- #22 implementada y gates verdes;
+- OTP público no revela cuenta existente/nueva;
+- target phone nunca se persiste en plaintext en el dominio de reencuentro;
+- secreto HMAC fuera de Git y fuera de Terraform state;
+- no existe búsqueda pública por teléfono;
+- no existe seeker-visible match/login/read/location/status;
+- reveal de contacto requiere acción explícita del target;
+- block/report abuse probado;
+- rate limit por identidad verificada y targets únicos;
+- notificación neutra, sin PII en lock screen;
+- política de retención y privacidad aprobada;
+- kill switch `FEATURE_REUNIFICATION` probado.
+
 #### Operación
 - rollback documentado.
 - runbook de caída de API/DB/SMS.
@@ -89,6 +104,7 @@ B. desactivar temporalmente persistencia offline de payload sensible mediante fe
 - matching automático de ayudas.
 - WhatsApp.
 - WebRTC/peer relay.
+- reencuentro.
 - mapas offline avanzados.
 
 ### Regla GO / NO-GO
@@ -101,7 +117,9 @@ NO-GO automático si:
 - una credencial real está en Git;
 - los endpoints públicos exponen teléfono/GPS exacto de personas;
 - una misma petición puede generar incidentes duplicados por retry;
-- no hay forma de identificar quién hizo una acción operacional.
+- no hay forma de identificar quién hizo una acción operacional;
+- reencuentro permite confirmar que un teléfono existe, inició sesión, leyó un aviso o está localizado;
+- el seeker puede conocer una acción `IGNORE/BLOCK/REPORT_ABUSE` del target.
 
 ---
 
@@ -134,6 +152,15 @@ Si identidad de damnificados está habilitada:
 - política de retención/borrado.
 - consentimiento institucional.
 - decisión humana final.
+
+Si reencuentro está habilitado:
+- threat drill de stalking/enumeration;
+- revisión de logs para demostrar ausencia de target phone/token;
+- recuperación/rotación del secreto HMAC ensayada;
+- métricas de abuso sin PII;
+- procedimiento para reportes de abuso y solicitudes de autoridades;
+- revisión específica de menores/personas vulnerables;
+- pruebas en teléfonos compartidos y pantallas bloqueadas.
 
 ### Instituciones
 - #4 cerrada.
@@ -168,6 +195,7 @@ FEATURE_ASSISTANCE_MATCHING=false
 FEATURE_WHATSAPP=false
 FEATURE_WEBRTC_RELAY=false
 FEATURE_OPERATIONAL_LAYERS=false
+FEATURE_REUNIFICATION=false
 ```
 
 A medida que una capacidad supera su gate, se habilita explícitamente.
@@ -187,6 +215,7 @@ A medida que una capacidad supera su gate, se habilita explícitamente.
 | #8 SecureEnvelope client | obligatorio si offline ON | obligatorio | sí |
 | #9 SecureEnvelope server | obligatorio si offline ON | obligatorio | sí |
 | #10 WebRTC relay | no | solo si relay P2P se declara producción | sí |
+| #22 Reencuentro seguro | obligatorio si reencuentro ON | threat drill + operación | sí |
 
 ---
 
