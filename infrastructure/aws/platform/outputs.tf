@@ -30,6 +30,18 @@ output "rds_endpoint" {
   value = aws_db_instance.postgres.address
 }
 
+output "rds_instance_identifier" {
+  value = aws_db_instance.postgres.identifier
+}
+
+output "rds_subnet_group_name" {
+  value = aws_db_subnet_group.main.name
+}
+
+output "rds_security_group_id" {
+  value = aws_security_group.db.id
+}
+
 output "rds_master_secret_arn" {
   value     = aws_db_instance.postgres.master_user_secret[0].secret_arn
   sensitive = true
