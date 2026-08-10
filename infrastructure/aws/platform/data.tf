@@ -54,13 +54,13 @@ resource "aws_db_instance" "postgres" {
   maintenance_window      = "sun:05:00-sun:06:00"
   copy_tags_to_snapshot   = true
 
-  performance_insights_enabled          = true
-  performance_insights_kms_key_id       = aws_kms_key.data.arn
-  enabled_cloudwatch_logs_exports       = ["postgresql"]
-  auto_minor_version_upgrade            = true
-  deletion_protection                   = var.deletion_protection
-  skip_final_snapshot                   = false
-  final_snapshot_identifier             = "${local.name}-postgres-final"
+  performance_insights_enabled    = true
+  performance_insights_kms_key_id = aws_kms_key.data.arn
+  enabled_cloudwatch_logs_exports = ["postgresql"]
+  auto_minor_version_upgrade      = true
+  deletion_protection             = var.deletion_protection
+  skip_final_snapshot             = false
+  final_snapshot_identifier       = "${local.name}-postgres-final"
 
   lifecycle {
     prevent_destroy = false
