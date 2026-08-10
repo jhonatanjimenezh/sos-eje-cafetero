@@ -4,13 +4,15 @@ import { useEffect } from 'react';
 import { requestPersistentStorage } from '../../lib/offline-db';
 import { syncPendingIncidents } from '../../lib/offline-sync';
 
+const OFFLINE_QUEUE_ENABLED = process.env.NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE === 'true';
+
 export default function PwaBootstrap() {
   useEffect(() => {
     let disposed = false;
     let syncing = false;
 
     const synchronize = async () => {
-      if (disposed || syncing || !navigator.onLine) return;
+      if (!OFFLINE_QUEUE_ENABLED || disposed || syncing || !navigator.onLine) return;
       syncing = true;
       try {
         await syncPendingIncidents();
@@ -21,9 +23,13 @@ export default function PwaBootstrap() {
       }
     };
 
+    // El service worker puede seguir cacheando el shell público aunque la cola
+    // offline sensible esté apagada. Nunca debe cachear respuestas /api/.
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => undefined);
     }
+
+    if (!OFFLINE_QUEUE_ENABLED) return;
 
     requestPersistentStorage().catch(() => undefined);
     synchronize();
