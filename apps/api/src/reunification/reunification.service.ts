@@ -32,6 +32,12 @@ export class ReunificationService {
 
   constructor(@Inject(PG_POOL) private readonly db: Pool) {}
 
+  private assertEnabled() {
+    if (process.env.FEATURE_REUNIFICATION !== 'true') {
+      throw new ServiceUnavailableException('Reencuentro seguro está deshabilitado temporalmente');
+    }
+  }
+
   private decodeSecret(envName: string): Buffer {
     const raw = process.env[envName];
     if (!raw) throw new ServiceUnavailableException('Matching privado de reencuentro no configurado');
@@ -159,6 +165,7 @@ export class ReunificationService {
   }
 
   async createRequest(subject: string, dto: CreateReunificationRequestDto) {
+    this.assertEnabled();
     void this.pruneExpired();
     const seeker = await this.identity(subject);
     const targetPhone = normalizePhone(dto.targetPhone);
@@ -223,6 +230,7 @@ export class ReunificationService {
   }
 
   async inbox(subject: string) {
+    this.assertEnabled();
     void this.pruneExpired();
     const target = await this.identity(subject);
     const refs = this.lookupRefs(target.phone_e164);
@@ -290,6 +298,7 @@ export class ReunificationService {
   }
 
   async targetAction(subject: string, publicId: string, action: ReunificationTargetAction) {
+    this.assertEnabled();
     const request = await this.eligibleRequest(subject, publicId);
 
     await this.db.query(
