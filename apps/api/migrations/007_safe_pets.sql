@@ -164,20 +164,13 @@ CREATE TABLE IF NOT EXISTS pet_blocks (
   UNIQUE(blocker_subject, blocked_subject, context)
 );
 
--- Public projection: intentionally excludes auth subjects, phone numbers, exact_location,
--- encrypted ownership payloads, claim evidence and private actions.
+-- V1 public projection intentionally exposes only fields the web catalog is allowed
+-- to render. Species/rasgos/location remain internal even though the case stores them.
 CREATE OR REPLACE VIEW public_pet_cases AS
 SELECT
   c.public_id,
   c.kind,
-  c.animal_type,
   c.public_name,
-  c.public_description,
-  c.breed,
-  c.color,
-  c.city,
-  c.area_hint,
-  c.occurred_at,
   c.status,
   c.created_at
 FROM pet_cases c
