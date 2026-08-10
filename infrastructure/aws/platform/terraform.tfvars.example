@@ -12,15 +12,11 @@ api_desired_count = 2
 api_min_count     = 2
 api_max_count     = 10
 
-db_instance_class       = "db.t4g.medium"
-db_allocated_storage    = 100
-db_max_allocated_storage = 500
-db_backup_retention_days = 14
-delete_protection_note   = "La variable correcta es deletion_protection; esta línea debe borrarse"
-delection_protection_placeholder = ""
-
-# Reemplazar las dos líneas anteriores por:
-# deletion_protection = true
+db_instance_class         = "db.t4g.medium"
+db_allocated_storage      = 100
+db_max_allocated_storage  = 500
+db_backup_retention_days  = 14
+deletion_protection       = true
 
 redis_node_type = "cache.t4g.small"
 
@@ -30,14 +26,14 @@ route53_zone_id = ""
 
 alarm_email = ""
 
-# CORS de evidencia. Para producción con identidad habilitada usar el dominio exacto:
-evidence_cors_origins = ["*"]
+# Para producción con identidad habilitada, reemplazar * por el dominio exacto.
+evidence_cors_origins   = ["*"]
 evidence_retention_days = 90
 
 # Safe mode: habilitar una capacidad solo después de superar su gate.
-feature_affected_identity    = false
-feature_liveness             = false
-feature_assistance_matching  = false
-feature_whatsapp             = false
-feature_operational_layers   = false
-feature_secure_envelope      = false
+feature_affected_identity   = false
+feature_liveness            = false
+feature_assistance_matching = false
+feature_whatsapp            = false
+feature_operational_layers  = false
+feature_secure_envelope     = false
