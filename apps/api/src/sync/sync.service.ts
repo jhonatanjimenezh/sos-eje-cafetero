@@ -43,8 +43,6 @@ function digestB64url(value: Buffer): string {
 
 @Injectable()
 export class SyncService {
-  private readonly rate = new Map<string, { minute: number; count: number }>();
-
   constructor(
     @Inject(PG_POOL) private readonly db: Pool,
     private readonly incidents: IncidentsService,
@@ -57,19 +55,6 @@ export class SyncService {
 
   private assertEnabled() {
     if (!this.enabled()) throw new ServiceUnavailableException('SecureEnvelope está deshabilitado por feature flag');
-  }
-
-  enforceRateLimit(ip: string) {
-    const max = Number(process.env.SYNC_BATCH_REQUESTS_PER_MINUTE ?? 30);
-    const minute = Math.floor(Date.now() / 60000);
-    const key = ip || 'unknown';
-    const current = this.rate.get(key);
-    if (!current || current.minute !== minute) {
-      this.rate.set(key, { minute, count: 1 });
-      return;
-    }
-    current.count += 1;
-    if (current.count > max) throw new HttpException('Demasiados lotes de sincronización', HttpStatus.TOO_MANY_REQUESTS);
   }
 
   async cryptoConfig() {
@@ -103,7 +88,7 @@ export class SyncService {
     return { ciphertext, iv };
   }
 
-  private async verifyEmitter(envelope: SecureEnvelopeV1, ciphertext: Buffer) {
+  private verifyEmitterSignature(envelope: SecureEnvelopeV1, ciphertext: Buffer) {
     if (digestB64url(ciphertext) !== envelope.ciphertextSha256) throw new EnvelopeRejected('CIPHERTEXT_DIGEST_MISMATCH');
 
     let publicKey;
@@ -124,7 +109,9 @@ export class SyncService {
       signature,
     );
     if (!valid) throw new EnvelopeRejected('SIGNATURE_INVALID');
+  }
 
+  private async assertEmitterActiveAndRegister(envelope: SecureEnvelopeV1) {
     const key = await this.db.query('SELECT revoked_at FROM secure_device_keys WHERE emitter_key_id=$1', [envelope.emitterKeyId]);
     if (key.rows[0]?.revoked_at) throw new EnvelopeRejected('EMITTER_KEY_REVOKED');
     await this.db.query(`INSERT INTO secure_device_keys(emitter_key_id,public_key_spki_sha256)
@@ -186,8 +173,9 @@ export class SyncService {
 
   private async saveReceipt(client: PoolClient | Pool, receipt: SyncReceiptV1) {
     await client.query(`INSERT INTO secure_sync_receipts(
-      message_id,ciphertext_sha256,status,public_entity_id,reason_code,receipt_signing_key_id,server_signature)
-      VALUES($1,$2,$3,$4,$5,$6,$7)`, [
+      emitter_key_id,message_id,ciphertext_sha256,status,public_entity_id,reason_code,receipt_signing_key_id,server_signature)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [
+      receipt.emitterKeyId,
       receipt.messageId,
       receipt.ciphertextSha256,
       receipt.status,
@@ -201,6 +189,7 @@ export class SyncService {
   private async replayReceipt(row: any): Promise<SyncReceiptV1> {
     return this.signedReceipt({
       version: 1,
+      emitterKeyId: row.emitter_key_id,
       messageId: row.message_id,
       ciphertextSha256: row.ciphertext_sha256,
       status: row.processing_status === 'ACCEPTED' ? 'ALREADY_PROCESSED' : 'REJECTED',
@@ -210,31 +199,82 @@ export class SyncService {
     });
   }
 
-  private async persistRejected(envelope: SecureEnvelopeV1, code: string): Promise<SyncReceiptV1> {
-    await this.db.query(`INSERT INTO secure_sync_messages(
-      message_id,ciphertext_sha256,emitter_key_id,server_key_id,kind,processing_status,rejection_code,created_at,expires_at,processed_at)
-      VALUES($1,$2,$3,$4,$5,'REJECTED',$6,$7,$8,now())
-      ON CONFLICT(message_id) DO NOTHING`, [
-      envelope.messageId,
-      envelope.ciphertextSha256,
-      envelope.emitterKeyId,
-      envelope.serverKeyId,
-      envelope.kind,
-      code,
-      envelope.createdAt,
-      envelope.expiresAt,
-    ]);
-    const receipt = await this.signedReceipt({
+  private async persistAuthenticatedRejection(envelope: SecureEnvelopeV1, code: string): Promise<SyncReceiptV1> {
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const namespace = `${envelope.emitterKeyId}:${envelope.messageId}`;
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [namespace]);
+      const existing = await client.query(
+        'SELECT * FROM secure_sync_messages WHERE emitter_key_id=$1 AND message_id=$2',
+        [envelope.emitterKeyId, envelope.messageId],
+      );
+
+      if (existing.rowCount) {
+        const row = existing.rows[0];
+        let receipt: SyncReceiptV1;
+        if (row.ciphertext_sha256 !== envelope.ciphertextSha256) {
+          receipt = await this.signedReceipt({
+            version: 1,
+            emitterKeyId: envelope.emitterKeyId,
+            messageId: envelope.messageId,
+            ciphertextSha256: envelope.ciphertextSha256,
+            status: 'REJECTED',
+            receivedAt: new Date().toISOString(),
+            reasonCode: 'MESSAGE_ID_DIGEST_CONFLICT',
+          });
+        } else {
+          receipt = await this.replayReceipt(row);
+        }
+        await this.saveReceipt(client, receipt);
+        await client.query('COMMIT');
+        return receipt;
+      }
+
+      await client.query(`INSERT INTO secure_sync_messages(
+        emitter_key_id,message_id,ciphertext_sha256,server_key_id,kind,processing_status,rejection_code,created_at,expires_at,processed_at)
+        VALUES($1,$2,$3,$4,$5,'REJECTED',$6,$7,$8,now())`, [
+        envelope.emitterKeyId,
+        envelope.messageId,
+        envelope.ciphertextSha256,
+        envelope.serverKeyId,
+        envelope.kind,
+        code,
+        envelope.createdAt,
+        envelope.expiresAt,
+      ]);
+      const receipt = await this.signedReceipt({
+        version: 1,
+        emitterKeyId: envelope.emitterKeyId,
+        messageId: envelope.messageId,
+        ciphertextSha256: envelope.ciphertextSha256,
+        status: 'REJECTED',
+        receivedAt: new Date().toISOString(),
+        reasonCode: code,
+      });
+      await this.saveReceipt(client, receipt);
+      await client.query('COMMIT');
+      return receipt;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async ephemeralRejectedReceipt(envelope: SecureEnvelopeV1, code: string): Promise<SyncReceiptV1> {
+    // No reserva messageId: antes de verificar la firma, un relay no puede ocupar el
+    // namespace de un emisor legítimo enviando primero una copia alterada.
+    return this.signedReceipt({
       version: 1,
+      emitterKeyId: envelope.emitterKeyId,
       messageId: envelope.messageId,
       ciphertextSha256: envelope.ciphertextSha256,
       status: 'REJECTED',
       receivedAt: new Date().toISOString(),
       reasonCode: code,
     });
-    // El FK solo existe si el insert anterior creó o ya encontró el messageId.
-    await this.saveReceipt(this.db, receipt);
-    return receipt;
   }
 
   private async recordMetric(receipt: SyncReceiptV1, latencyMs: number) {
@@ -258,29 +298,37 @@ export class SyncService {
   private async processOne(dto: SecureEnvelopeDto): Promise<SyncReceiptV1> {
     const started = Date.now();
     const envelope = dto as SecureEnvelopeV1;
+    let emitterAuthenticated = false;
     try {
       const config = await this.crypto.cryptoConfig();
       const { ciphertext, iv } = this.validateMetadata(envelope, config);
-      await this.verifyEmitter(envelope, ciphertext);
+      this.verifyEmitterSignature(envelope, ciphertext);
+      emitterAuthenticated = true;
+      await this.assertEmitterActiveAndRegister(envelope);
 
       const client = await this.db.connect();
       try {
         await client.query('BEGIN');
-        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [envelope.messageId]);
-        const existing = await client.query('SELECT * FROM secure_sync_messages WHERE message_id=$1', [envelope.messageId]);
+        const namespace = `${envelope.emitterKeyId}:${envelope.messageId}`;
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [namespace]);
+        const existing = await client.query(
+          'SELECT * FROM secure_sync_messages WHERE emitter_key_id=$1 AND message_id=$2',
+          [envelope.emitterKeyId, envelope.messageId],
+        );
         if (existing.rowCount) {
           const row = existing.rows[0];
           if (row.ciphertext_sha256 !== envelope.ciphertextSha256) {
-            await client.query('COMMIT');
             const receipt = await this.signedReceipt({
               version: 1,
+              emitterKeyId: envelope.emitterKeyId,
               messageId: envelope.messageId,
               ciphertextSha256: envelope.ciphertextSha256,
               status: 'REJECTED',
               receivedAt: new Date().toISOString(),
               reasonCode: 'MESSAGE_ID_DIGEST_CONFLICT',
             });
-            await this.saveReceipt(this.db, receipt);
+            await this.saveReceipt(client, receipt);
+            await client.query('COMMIT');
             await this.recordMetric(receipt, Date.now() - started);
             return receipt;
           }
@@ -292,28 +340,44 @@ export class SyncService {
         }
 
         await client.query(`INSERT INTO secure_sync_messages(
-          message_id,ciphertext_sha256,emitter_key_id,server_key_id,kind,processing_status,created_at,expires_at)
+          emitter_key_id,message_id,ciphertext_sha256,server_key_id,kind,processing_status,created_at,expires_at)
           VALUES($1,$2,$3,$4,$5,'PROCESSING',$6,$7)`, [
-          envelope.messageId,envelope.ciphertextSha256,envelope.emitterKeyId,envelope.serverKeyId,envelope.kind,envelope.createdAt,envelope.expiresAt,
+          envelope.emitterKeyId,
+          envelope.messageId,
+          envelope.ciphertextSha256,
+          envelope.serverKeyId,
+          envelope.kind,
+          envelope.createdAt,
+          envelope.expiresAt,
         ]);
 
         const plaintext = await this.decryptPayload(envelope, ciphertext, iv);
-        const incident = await this.incidentFromPlaintext(envelope, plaintext);
-        plaintext.fill(0);
+        let incident: CreateIncidentDto;
+        try {
+          incident = await this.incidentFromPlaintext(envelope, plaintext);
+        } finally {
+          plaintext.fill(0);
+        }
 
-        // IncidentsService tiene idempotencia de dominio. Si el commit del receipt
-        // falla después de crear el incidente, el retry recupera exactamente el mismo incidente.
-        const entity = await this.incidents.create(incident, 'SECURE_RELAY', `secure:${envelope.messageId}`);
+        // Idempotencia de dominio también incluye emitterKeyId: un peer que observe el
+        // UUID no puede ocupar el namespace con otra clave y bloquear al emisor original.
+        const domainIdempotency = `secure:${envelope.emitterKeyId}:${envelope.messageId}`;
+        const entity = await this.incidents.create(incident, 'SECURE_RELAY', domainIdempotency);
         const receipt = await this.signedReceipt({
           version: 1,
+          emitterKeyId: envelope.emitterKeyId,
           messageId: envelope.messageId,
           ciphertextSha256: envelope.ciphertextSha256,
           status: 'ACCEPTED',
           receivedAt: new Date().toISOString(),
           publicEntityId: entity.public_id,
         });
-        await client.query(`UPDATE secure_sync_messages SET processing_status='ACCEPTED',public_entity_id=$2,
-          processed_at=now() WHERE message_id=$1`, [envelope.messageId,entity.public_id]);
+        await client.query(`UPDATE secure_sync_messages SET processing_status='ACCEPTED',public_entity_id=$3,
+          processed_at=now() WHERE emitter_key_id=$1 AND message_id=$2`, [
+          envelope.emitterKeyId,
+          envelope.messageId,
+          entity.public_id,
+        ]);
         await this.saveReceipt(client, receipt);
         await client.query('COMMIT');
         await this.recordMetric(receipt, Date.now() - started);
@@ -327,7 +391,9 @@ export class SyncService {
     } catch (error) {
       if (error instanceof SyncCryptoUnavailableError) throw error;
       if (error instanceof EnvelopeRejected) {
-        const receipt = await this.persistRejected(envelope, error.code);
+        const receipt = emitterAuthenticated
+          ? await this.persistAuthenticatedRejection(envelope, error.code)
+          : await this.ephemeralRejectedReceipt(envelope, error.code);
         await this.recordMetric(receipt, Date.now() - started);
         return receipt;
       }
