@@ -1,5 +1,6 @@
-const CACHE_VERSION = 'sos-shell-v2';
+const CACHE_VERSION = 'sos-shell-v3';
 const CORE_SHELL = ['/', '/report/', '/relay/', '/manifest.webmanifest', '/sos-icon.svg'];
+const PUBLIC_NAVIGATION_PATHS = new Set(['/', '/report', '/report/', '/relay', '/relay/']);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_VERSION).then((cache) => cache.addAll(CORE_SHELL)).catch(() => undefined));
@@ -28,6 +29,11 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
 
   if (request.mode === 'navigate') {
+    // Allowlist real. Cualquier ruta nueva es network-only hasta que una revisión de
+    // privacidad la marque explícitamente como shell público. Esto excluye, entre otras,
+    // /reencuentro, /damnificados, /command-center y futuras pantallas privadas.
+    if (!PUBLIC_NAVIGATION_PATHS.has(url.pathname)) return;
+
     event.respondWith(
       fetch(request)
         .then((response) => {
@@ -49,6 +55,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Solo assets estáticos pueden entrar en cache fuera de navegaciones. Las respuestas
+  // document/API nunca llegan aquí por request.destination y la frontera /api/ anterior.
   if (['script', 'style', 'font', 'image', 'manifest'].includes(request.destination)) {
     event.respondWith(
       caches.match(request).then((cached) => {

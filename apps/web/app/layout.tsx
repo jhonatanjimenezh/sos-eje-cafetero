@@ -3,6 +3,7 @@ import '@aws-amplify/ui-react/styles.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './globals.css';
 import PwaBootstrap from './components/PwaBootstrap';
+import ReunificationNotifier from './components/ReunificationNotifier';
 
 export const metadata: Metadata = {
   title: 'SOS Eje Cafetero',
@@ -16,6 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="es">
       <body>
         <PwaBootstrap />
+        <ReunificationNotifier />
         {children}
       </body>
     </html>

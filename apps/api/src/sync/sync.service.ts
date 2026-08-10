@@ -159,10 +159,15 @@ export class SyncService {
     return dto;
   }
 
-  private async signedReceipt(input: Omit<SyncReceiptV1, 'receiptSigningKeyId' | 'receiptSignatureSuite' | 'serverSignature'>): Promise<SyncReceiptV1> {
+  private async signedReceipt(
+    input: Omit<SyncReceiptV1, 'receiptSigningKeyId' | 'receiptSignatureSuite' | 'serverSignature' | 'emitterAuthenticated'> & {
+      emitterAuthenticated?: boolean;
+    },
+  ): Promise<SyncReceiptV1> {
     const config = await this.crypto.cryptoConfig();
     const receipt: SyncReceiptV1 = {
       ...input,
+      emitterAuthenticated: input.emitterAuthenticated ?? true,
       receiptSigningKeyId: config.receiptSigningKeyId,
       receiptSignatureSuite: RECEIPT_SIGNATURE_SUITE,
       serverSignature: '',
@@ -265,13 +270,15 @@ export class SyncService {
 
   private async ephemeralRejectedReceipt(envelope: SecureEnvelopeV1, code: string): Promise<SyncReceiptV1> {
     // No reserva messageId: antes de verificar la firma, un relay no puede ocupar el
-    // namespace de un emisor legítimo enviando primero una copia alterada.
+    // namespace de un emisor legítimo enviando primero una copia alterada. El flag
+    // firmado evita que un relay use este diagnóstico para provocar purga local.
     return this.signedReceipt({
       version: 1,
       emitterKeyId: envelope.emitterKeyId,
       messageId: envelope.messageId,
       ciphertextSha256: envelope.ciphertextSha256,
       status: 'REJECTED',
+      emitterAuthenticated: false,
       receivedAt: new Date().toISOString(),
       reasonCode: code,
     });

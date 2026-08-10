@@ -11,6 +11,7 @@ FEATURE_LIVENESS="$(terraform -chdir="$PLATFORM" output -raw feature_liveness)"
 LIVENESS_PROVIDER="$(terraform -chdir="$PLATFORM" output -raw liveness_provider)"
 FEATURE_SECURE_ENVELOPE="$(terraform -chdir="$PLATFORM" output -raw feature_secure_envelope)"
 FEATURE_WEBRTC_RELAY="$(terraform -chdir="$PLATFORM" output -raw feature_webrtc_relay)"
+FEATURE_REUNIFICATION="$(terraform -chdir="$PLATFORM" output -raw feature_reunification)"
 TAG="sos-eje-cafetero-web-build:$(git -C "$ROOT" rev-parse --short=12 HEAD)"
 TMP="$(mktemp -d)"
 CID=""
@@ -24,6 +25,7 @@ docker build \
   --build-arg NEXT_PUBLIC_FEATURE_WEBRTC_RELAY="$FEATURE_WEBRTC_RELAY" \
   --build-arg NEXT_PUBLIC_FEATURE_LIVENESS="$FEATURE_LIVENESS" \
   --build-arg NEXT_PUBLIC_LIVENESS_PROVIDER="$LIVENESS_PROVIDER" \
+  --build-arg NEXT_PUBLIC_FEATURE_REUNIFICATION="$FEATURE_REUNIFICATION" \
   --build-arg NEXT_PUBLIC_MAP_STYLE_URL="${NEXT_PUBLIC_MAP_STYLE_URL:-https://demotiles.maplibre.org/style.json}" \
   -t "$TAG" "$ROOT"
 
@@ -39,3 +41,4 @@ aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths '/*
 echo "Web desplegada: $(terraform -chdir="$PLATFORM" output -raw public_url)"
 echo "Liveness web: enabled=$FEATURE_LIVENESS provider=$LIVENESS_PROVIDER"
 echo "Secure offline web: envelope=$FEATURE_SECURE_ENVELOPE relay=$FEATURE_WEBRTC_RELAY"
+echo "Reencuentro seguro web: enabled=$FEATURE_REUNIFICATION"
