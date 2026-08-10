@@ -13,6 +13,7 @@ import { AssistanceModule } from './assistance/assistance.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { SyncModule } from './sync/sync.module';
 import { ReunificationModule } from './reunification/reunification.module';
+import { PetsModule } from './pets/pets.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { ReunificationModule } from './reunification/reunification.module';
     AnalyticsModule,
     SyncModule,
     ReunificationModule,
+    PetsModule,
   ],
   controllers: [HealthController],
 })
