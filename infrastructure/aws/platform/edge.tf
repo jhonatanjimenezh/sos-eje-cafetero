@@ -201,6 +201,11 @@ resource "aws_cloudfront_distribution" "app" {
     domain_name = aws_lb.api.dns_name
     origin_id   = "api-alb"
 
+    custom_header {
+      name  = "X-SOS-Origin-Verify"
+      value = random_password.origin_verify.result
+    }
+
     custom_origin_config {
       http_port              = 80
       https_port             = 443
