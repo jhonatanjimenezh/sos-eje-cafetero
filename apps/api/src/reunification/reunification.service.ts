@@ -83,6 +83,16 @@ export class ReunificationService {
     return this.lookupKeys().map((key) => ({ version: key.version, token: this.lookupToken(phoneE164, key) }));
   }
 
+  private lookupPredicate(alias: string, refs: LookupRef[], startParameter: number) {
+    const params: Array<string | number> = [];
+    const parts = refs.map((ref, index) => {
+      const base = startParameter + index * 2;
+      params.push(ref.version, ref.token);
+      return `(${alias}.lookup_key_version=$${base} AND ${alias}.target_lookup_token=$${base + 1})`;
+    });
+    return { sql: `(${parts.join(' OR ')})`, params };
+  }
+
   private async identity(subject: string): Promise<AuthIdentity> {
     const result = await this.db.query<AuthIdentity>(
       'SELECT subject,phone_e164 FROM auth_identities WHERE subject=$1',
@@ -169,8 +179,10 @@ export class ReunificationService {
     void this.pruneExpired();
     const seeker = await this.identity(subject);
     const targetPhone = normalizePhone(dto.targetPhone);
-    const currentKey = this.lookupKeys()[0];
+    const keys = this.lookupKeys();
+    const currentKey = keys[0];
     const targetToken = this.lookupToken(targetPhone, currentKey);
+    const targetRefs = keys.map((key) => ({ version: key.version, token: this.lookupToken(targetPhone, key) }));
     await this.enforceCreateLimits(subject, targetToken);
 
     const ownToken = this.lookupToken(seeker.phone_e164, currentKey);
@@ -191,21 +203,61 @@ export class ReunificationService {
         [subject, targetToken, currentKey.version, seekerDisplayName, declaredRelationship, message, dto.shareSeekerPhone, expiresAt],
       );
     } else {
-      result = await this.db.query(
-        `INSERT INTO reunification_requests(
-          seeker_auth_subject,target_lookup_token,lookup_key_version,seeker_display_name,
-          declared_relationship,message,share_seeker_phone,status,expires_at)
-         VALUES($1,$2,$3,$4,$5,$6,$7,'ACTIVE',$8)
-         ON CONFLICT(seeker_auth_subject,lookup_key_version,target_lookup_token) WHERE status='ACTIVE'
-         DO UPDATE SET
-           seeker_display_name=excluded.seeker_display_name,
-           declared_relationship=excluded.declared_relationship,
-           message=excluded.message,
-           share_seeker_phone=excluded.share_seeker_phone,
-           expires_at=GREATEST(reunification_requests.expires_at,excluded.expires_at)
-         RETURNING public_id`,
-        [subject, targetToken, currentKey.version, seekerDisplayName, declaredRelationship, message, dto.shareSeekerPhone, expiresAt],
+      // Durante una rotación, una solicitud activa puede estar indexada con la clave
+      // anterior. La migramos a la clave actual y conservamos el mismo public_id para
+      // impedir duplicados y evitar cambios observables por el seeker.
+      const predicate = this.lookupPredicate('r', targetRefs, 2);
+      const existing = await this.db.query(
+        `SELECT r.id,r.public_id
+         FROM reunification_requests r
+         WHERE r.seeker_auth_subject=$1
+           AND r.status='ACTIVE'
+           AND ${predicate.sql}
+         ORDER BY r.created_at DESC
+         LIMIT 1`,
+        [subject, ...predicate.params],
       );
+
+      if (existing.rowCount) {
+        result = await this.db.query(
+          `UPDATE reunification_requests
+           SET target_lookup_token=$2,
+               lookup_key_version=$3,
+               seeker_display_name=$4,
+               declared_relationship=$5,
+               message=$6,
+               share_seeker_phone=$7,
+               expires_at=GREATEST(expires_at,$8)
+           WHERE id=$1
+           RETURNING public_id`,
+          [
+            existing.rows[0].id,
+            targetToken,
+            currentKey.version,
+            seekerDisplayName,
+            declaredRelationship,
+            message,
+            dto.shareSeekerPhone,
+            expiresAt,
+          ],
+        );
+      } else {
+        result = await this.db.query(
+          `INSERT INTO reunification_requests(
+            seeker_auth_subject,target_lookup_token,lookup_key_version,seeker_display_name,
+            declared_relationship,message,share_seeker_phone,status,expires_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,'ACTIVE',$8)
+           ON CONFLICT(seeker_auth_subject,lookup_key_version,target_lookup_token) WHERE status='ACTIVE'
+           DO UPDATE SET
+             seeker_display_name=excluded.seeker_display_name,
+             declared_relationship=excluded.declared_relationship,
+             message=excluded.message,
+             share_seeker_phone=excluded.share_seeker_phone,
+             expires_at=GREATEST(reunification_requests.expires_at,excluded.expires_at)
+           RETURNING public_id`,
+          [subject, targetToken, currentKey.version, seekerDisplayName, declaredRelationship, message, dto.shareSeekerPhone, expiresAt],
+        );
+      }
     }
 
     const requestId = result.rows[0].public_id as string;
@@ -214,19 +266,9 @@ export class ReunificationService {
       expiresAt: expiresAt.toISOString(),
     });
 
-    // No devolver targetExists/matched/delivered/read/online ni ningún dato derivado
-    // de la actividad de la persona buscada.
+    // No devolver estado de existencia, match, entrega, lectura, conexión ni ningún
+    // dato derivado de la actividad de la persona buscada.
     return { status: 'REQUEST_ACCEPTED', requestId };
-  }
-
-  private lookupPredicate(alias: string, refs: LookupRef[], startParameter: number) {
-    const params: Array<string | number> = [];
-    const parts = refs.map((ref, index) => {
-      const base = startParameter + index * 2;
-      params.push(ref.version, ref.token);
-      return `(${alias}.lookup_key_version=$${base} AND ${alias}.target_lookup_token=$${base + 1})`;
-    });
-    return { sql: `(${parts.join(' OR ')})`, params };
   }
 
   async inbox(subject: string) {
@@ -333,21 +375,14 @@ export class ReunificationService {
       [subject, request.seeker_auth_subject],
     );
 
+    // BLOCK y REPORT_ABUSE viven únicamente en el estado privado del target. Nunca
+    // mutan reunification_requests.status: hacerlo permitiría al seeker inferir la
+    // acción al re-enviar el mismo teléfono y observar cambios de lifecycle/public_id.
     if (action === ReunificationTargetAction.BLOCK) {
-      await this.db.query(
-        `UPDATE reunification_requests SET status='BLOCKED_BY_TARGET'
-         WHERE id=$1 AND status='ACTIVE'`,
-        [request.id],
-      );
       await this.audit(subject, 'REUNIFICATION_SEEKER_BLOCKED', publicId);
       return { status: 'BLOCKED' };
     }
 
-    await this.db.query(
-      `UPDATE reunification_requests SET status='ABUSE_REVIEW'
-       WHERE id=$1 AND status='ACTIVE'`,
-      [request.id],
-    );
     await this.audit(subject, 'REUNIFICATION_ABUSE_REPORTED', publicId);
     return { status: 'REPORTED' };
   }
