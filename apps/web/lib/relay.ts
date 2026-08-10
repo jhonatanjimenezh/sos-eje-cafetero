@@ -4,6 +4,7 @@ import {
   getReceipt,
   listMessageInventory,
   listReceipts,
+  relayIdentity,
   saveReceipt,
   saveRelayEnvelope,
 } from './offline-db';
@@ -13,9 +14,12 @@ const MAX_RELAY_PACKET_BYTES = 24 * 1024;
 const MAX_INVENTORY_ITEMS = 500;
 const encoder = new TextEncoder();
 
+type RelayDigestRef = { emitterKeyId: string; messageId: string; ciphertextSha256: string };
+type RelayIdRef = { emitterKeyId: string; messageId: string };
+
 export type RelayMessage =
-  | { type: 'INVENTORY'; messages: Array<{ messageId: string; ciphertextSha256: string }>; receipts: string[] }
-  | { type: 'NEED'; messageIds: string[]; receiptIds: string[] }
+  | { type: 'INVENTORY'; messages: RelayDigestRef[]; receipts: RelayDigestRef[] }
+  | { type: 'NEED'; messages: RelayIdRef[]; receipts: RelayIdRef[] }
   | { type: 'ENVELOPE'; envelope: SecureEnvelopeV1 }
   | { type: 'RECEIPT'; receipt: SyncReceiptV1 }
   | { type: 'PING' };
@@ -36,39 +40,61 @@ export async function buildRelayInventory(): Promise<RelayMessage> {
     listMessageInventory(MAX_INVENTORY_ITEMS),
     listReceipts(MAX_INVENTORY_ITEMS),
   ]);
-  return { type: 'INVENTORY', messages, receipts: receipts.map((item) => item.messageId) };
+  return {
+    type: 'INVENTORY',
+    messages,
+    receipts: receipts.map((item) => ({
+      emitterKeyId: item.emitterKeyId,
+      messageId: item.messageId,
+      ciphertextSha256: item.ciphertextSha256,
+    })),
+  };
 }
 
 async function handleInventory(channel: RTCDataChannel, message: Extract<RelayMessage, { type: 'INVENTORY' }>) {
-  const localMessages = new Map((await listMessageInventory(MAX_INVENTORY_ITEMS)).map((item) => [item.messageId, item.ciphertextSha256]));
-  const localReceipts = new Set((await listReceipts(MAX_INVENTORY_ITEMS)).map((item) => item.messageId));
-  const messageIds: string[] = [];
-  const receiptIds: string[] = [];
+  const localMessages = new Map(
+    (await listMessageInventory(MAX_INVENTORY_ITEMS)).map((item) => [
+      relayIdentity(item.emitterKeyId, item.messageId),
+      item.ciphertextSha256,
+    ]),
+  );
+  const localReceipts = new Map(
+    (await listReceipts(MAX_INVENTORY_ITEMS)).map((item) => [
+      relayIdentity(item.emitterKeyId, item.messageId),
+      item.ciphertextSha256,
+    ]),
+  );
+  const messages: RelayIdRef[] = [];
+  const receipts: RelayIdRef[] = [];
 
   for (const remote of message.messages.slice(0, MAX_INVENTORY_ITEMS)) {
-    const localDigest = localMessages.get(remote.messageId);
-    if (!localDigest) messageIds.push(remote.messageId);
+    const key = relayIdentity(remote.emitterKeyId, remote.messageId);
+    const localDigest = localMessages.get(key);
+    if (!localDigest) messages.push({ emitterKeyId: remote.emitterKeyId, messageId: remote.messageId });
     else if (localDigest !== remote.ciphertextSha256) {
-      // El mismo messageId con otro digest es una señal de conflicto/tampering.
-      // No pedimos ni propagamos una versión ambigua.
+      // Mismo emisor+messageId con otro digest implica conflicto/tampering.
+      // Otro emisor puede reutilizar deliberadamente el UUID sin ocupar este namespace.
       continue;
     }
   }
-  for (const messageId of message.receipts.slice(0, MAX_INVENTORY_ITEMS)) {
-    if (!localReceipts.has(messageId)) receiptIds.push(messageId);
+  for (const remote of message.receipts.slice(0, MAX_INVENTORY_ITEMS)) {
+    const key = relayIdentity(remote.emitterKeyId, remote.messageId);
+    const localDigest = localReceipts.get(key);
+    if (!localDigest) receipts.push({ emitterKeyId: remote.emitterKeyId, messageId: remote.messageId });
+    else if (localDigest !== remote.ciphertextSha256) continue;
   }
-  send(channel, { type: 'NEED', messageIds, receiptIds });
+  send(channel, { type: 'NEED', messages, receipts });
 }
 
 async function handleNeed(channel: RTCDataChannel, message: Extract<RelayMessage, { type: 'NEED' }>) {
-  for (const messageId of message.messageIds.slice(0, MAX_INVENTORY_ITEMS)) {
-    const envelope = await getEnvelopeForRelay(messageId);
+  for (const ref of message.messages.slice(0, MAX_INVENTORY_ITEMS)) {
+    const envelope = await getEnvelopeForRelay(ref.emitterKeyId, ref.messageId);
     if (!envelope) continue;
     const packet: RelayMessage = { type: 'ENVELOPE', envelope };
     if (encodedSize(packet) <= MAX_RELAY_PACKET_BYTES) send(channel, packet);
   }
-  for (const messageId of message.receiptIds.slice(0, MAX_INVENTORY_ITEMS)) {
-    const receipt = await getReceipt(messageId);
+  for (const ref of message.receipts.slice(0, MAX_INVENTORY_ITEMS)) {
+    const receipt = await getReceipt(ref.emitterKeyId, ref.messageId);
     if (receipt) send(channel, { type: 'RECEIPT', receipt });
   }
 }
@@ -95,7 +121,7 @@ export async function handleRelayMessage(channel: RTCDataChannel, raw: string): 
   }
   if (message.type === 'RECEIPT') {
     if (!message.receipt) throw new Error('RECEIPT_INVALID');
-    const localEnvelope = await getEnvelopeForRelay(message.receipt.messageId);
+    const localEnvelope = await getEnvelopeForRelay(message.receipt.emitterKeyId, message.receipt.messageId);
     await verifyServerReceipt(message.receipt, localEnvelope);
     await saveReceipt(message.receipt);
     return 'RECEIPT_SAVED';
