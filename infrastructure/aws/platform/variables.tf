@@ -98,12 +98,28 @@ variable "evidence_retention_days" {
   description = "Retención técnica. Debe ajustarse a la política institucional antes de habilitar identidad real."
   type        = number
   default     = 90
+  validation {
+    condition     = var.evidence_retention_days >= 1 && var.evidence_retention_days <= 3650
+    error_message = "evidence_retention_days debe estar entre 1 y 3650."
+  }
 }
 
 variable "evidence_cors_origins" {
   description = "Origins autorizados para PUT presignado de evidencia. En producción usar el dominio exacto."
   type        = list(string)
   default     = ["*"]
+}
+
+variable "enable_guardduty_malware_protection" {
+  description = "Activa GuardDuty Malware Protection for S3 para objetos de evidencia nuevos."
+  type        = bool
+  default     = true
+}
+
+variable "require_malware_scan" {
+  description = "Impide enviar un expediente a revisión mientras la evidencia requerida no tenga resultado antimalware limpio."
+  type        = bool
+  default     = true
 }
 
 variable "domain_name" {
@@ -132,6 +148,26 @@ variable "feature_affected_identity" {
 variable "feature_liveness" {
   type    = bool
   default = false
+}
+
+variable "liveness_provider" {
+  description = "Proveedor de prueba de presencia. REKOGNITION en AWS; MANUAL conserva el reto de video como fallback no biométrico."
+  type        = string
+  default     = "REKOGNITION"
+  validation {
+    condition     = contains(["REKOGNITION", "MANUAL"], upper(var.liveness_provider))
+    error_message = "liveness_provider debe ser REKOGNITION o MANUAL."
+  }
+}
+
+variable "liveness_max_attempts_per_24h" {
+  description = "Límite antifraude de sesiones de liveness por expediente y ventana de 24 horas."
+  type        = number
+  default     = 3
+  validation {
+    condition     = var.liveness_max_attempts_per_24h >= 1 && var.liveness_max_attempts_per_24h <= 10
+    error_message = "liveness_max_attempts_per_24h debe estar entre 1 y 10."
+  }
 }
 
 variable "feature_assistance_matching" {

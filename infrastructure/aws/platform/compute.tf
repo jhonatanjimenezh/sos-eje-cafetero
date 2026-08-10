@@ -158,8 +158,13 @@ resource "aws_iam_role_policy" "ecs_task" {
         Resource = [aws_s3_bucket.evidence.arn]
       },
       {
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject"]
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:GetObjectTagging"
+        ]
         Resource = ["${aws_s3_bucket.evidence.arn}/private/*"]
       },
       {
@@ -171,6 +176,19 @@ resource "aws_iam_role_policy" "ecs_task" {
         Effect   = "Allow"
         Action   = ["cognito-idp:AdminGetUser"]
         Resource = [aws_cognito_user_pool.main.arn]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "rekognition:CreateFaceLivenessSession",
+          "rekognition:GetFaceLivenessSessionResults"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = [aws_iam_role.liveness_client.arn]
       },
       {
         Effect   = "Allow"
@@ -215,6 +233,12 @@ resource "aws_ecs_task_definition" "api" {
       { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.web.id },
       { name = "PRIVATE_EVIDENCE_BUCKET", value = aws_s3_bucket.evidence.id },
       { name = "EVIDENCE_KMS_KEY_ID", value = aws_kms_key.data.arn },
+      { name = "EVIDENCE_RETENTION_DAYS", value = tostring(var.evidence_retention_days) },
+      { name = "EVIDENCE_MALWARE_SCAN_MODE", value = var.enable_guardduty_malware_protection ? "GUARDDUTY" : "DISABLED" },
+      { name = "REQUIRE_MALWARE_SCAN", value = tostring(var.require_malware_scan) },
+      { name = "LIVENESS_PROVIDER", value = upper(var.liveness_provider) },
+      { name = "LIVENESS_CLIENT_ROLE_ARN", value = aws_iam_role.liveness_client.arn },
+      { name = "LIVENESS_MAX_ATTEMPTS_PER_24H", value = tostring(var.liveness_max_attempts_per_24h) },
       { name = "JOBS_QUEUE_URL", value = aws_sqs_queue.jobs.url },
       { name = "WEB_ORIGIN", value = var.domain_name != "" ? "https://${var.domain_name}" : "" },
       { name = "ALLOW_LEGACY_COMMAND_TOKEN", value = "false" },

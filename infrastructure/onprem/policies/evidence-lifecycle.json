@@ -1,0 +1,17 @@
+{
+  "Rules": [
+    {
+      "ID": "evidence-retention",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "private/"
+      },
+      "Expiration": {
+        "Days": __RETENTION_DAYS__
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 30
+      }
+    }
+  ]
+}

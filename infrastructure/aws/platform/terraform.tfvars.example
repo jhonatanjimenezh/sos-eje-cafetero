@@ -12,11 +12,11 @@ api_desired_count = 2
 api_min_count     = 2
 api_max_count     = 10
 
-db_instance_class         = "db.t4g.medium"
-db_allocated_storage      = 100
-db_max_allocated_storage  = 500
-db_backup_retention_days  = 14
-deletion_protection       = true
+db_instance_class        = "db.t4g.medium"
+db_allocated_storage     = 100
+db_max_allocated_storage = 500
+db_backup_retention_days = 14
+deletion_protection      = true
 
 redis_node_type = "cache.t4g.small"
 
@@ -26,9 +26,15 @@ route53_zone_id = ""
 
 alarm_email = ""
 
-# Para producción con identidad habilitada, reemplazar * por el dominio exacto.
-evidence_cors_origins   = ["*"]
-evidence_retention_days = 90
+# Evidencia sensible. En producción reemplazar * por el dominio exacto.
+evidence_cors_origins              = ["*"]
+evidence_retention_days            = 90
+enable_guardduty_malware_protection = true
+require_malware_scan               = true
+
+# Liveness es una señal antifraude, nunca la decisión final de ayuda.
+liveness_provider             = "REKOGNITION"
+liveness_max_attempts_per_24h = 3
 
 # Safe mode: habilitar una capacidad solo después de superar su gate.
 feature_affected_identity   = false

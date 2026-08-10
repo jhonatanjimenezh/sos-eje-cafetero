@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import '@aws-amplify/ui-react/styles.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './globals.css';
 import PwaBootstrap from './components/PwaBootstrap';

@@ -1,0 +1,88 @@
+name: Identity security validate
+
+on:
+  pull_request:
+    paths:
+      - 'apps/api/**'
+      - 'apps/web/**'
+      - 'infrastructure/aws/**'
+      - 'infrastructure/onprem/**'
+      - '.github/workflows/identity-security-validate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/api/**'
+      - 'apps/web/**'
+      - 'infrastructure/aws/**'
+      - 'infrastructure/onprem/**'
+      - '.github/workflows/identity-security-validate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: sos
+          POSTGRES_USER: sos
+          POSTGRES_PASSWORD: test-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sos -d sos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install workspace dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.4 --activate
+          pnpm install --no-frozen-lockfile
+      - name: Validate database migrations
+        env:
+          DATABASE_URL: postgresql://sos:test-only-password@localhost:5432/sos
+        run: pnpm --filter @sos/api migrate
+      - name: Verified-only assistance database invariant
+        env:
+          DATABASE_URL: postgresql://sos:test-only-password@localhost:5432/sos
+        run: node apps/api/test/verified-assistance-db.mjs
+      - name: Typecheck API
+        run: pnpm --filter @sos/api lint
+      - name: Build API
+        run: pnpm --filter @sos/api build
+      - name: Identity security invariants
+        run: node --test apps/api/test/identity-security.test.cjs
+      - name: Typecheck web
+        env:
+          NEXT_PUBLIC_FEATURE_LIVENESS: 'false'
+          NEXT_PUBLIC_LIVENESS_PROVIDER: MANUAL
+          NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE: 'false'
+        run: pnpm --filter @sos/web lint
+      - name: Build web
+        env:
+          NEXT_PUBLIC_API_URL: /api/v1
+          NEXT_PUBLIC_FEATURE_LIVENESS: 'false'
+          NEXT_PUBLIC_LIVENESS_PROVIDER: MANUAL
+          NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE: 'false'
+        run: pnpm --filter @sos/web build
+
+  scanner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Validate scanner syntax
+        run: python -m py_compile infrastructure/onprem/evidence-scanner/scanner.py
+      - name: Build scanner image
+        run: docker build infrastructure/onprem/evidence-scanner

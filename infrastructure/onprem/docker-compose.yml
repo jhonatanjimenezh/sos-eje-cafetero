@@ -53,14 +53,64 @@ services:
         condition: service_healthy
     entrypoint: >-
       /bin/sh -c '
-      mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
-      mc mb --ignore-existing local/$${PRIVATE_EVIDENCE_BUCKET} &&
-      mc anonymous set none local/$${PRIVATE_EVIDENCE_BUCKET} &&
+      set -eu;
+      mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}";
+      mc mb --ignore-existing local/$${PRIVATE_EVIDENCE_BUCKET};
+      mc anonymous set none local/$${PRIVATE_EVIDENCE_BUCKET};
+      mc version enable local/$${PRIVATE_EVIDENCE_BUCKET};
+      sed "s/__BUCKET__/$${PRIVATE_EVIDENCE_BUCKET}/g" /policies/sos-api.json > /tmp/sos-api.json;
+      sed "s/__BUCKET__/$${PRIVATE_EVIDENCE_BUCKET}/g" /policies/evidence-scanner.json > /tmp/evidence-scanner.json;
+      sed "s/__RETENTION_DAYS__/$${EVIDENCE_RETENTION_DAYS}/g" /policies/evidence-lifecycle.json > /tmp/evidence-lifecycle.json;
+      mc admin user rm local "$${S3_API_ACCESS_KEY}" >/dev/null 2>&1 || true;
+      mc admin user rm local "$${S3_SCANNER_ACCESS_KEY}" >/dev/null 2>&1 || true;
+      mc admin policy rm local sos-api >/dev/null 2>&1 || true;
+      mc admin policy rm local sos-evidence-scanner >/dev/null 2>&1 || true;
+      mc admin user add local "$${S3_API_ACCESS_KEY}" "$${S3_API_SECRET_KEY}";
+      mc admin user add local "$${S3_SCANNER_ACCESS_KEY}" "$${S3_SCANNER_SECRET_KEY}";
+      mc admin policy create local sos-api /tmp/sos-api.json;
+      mc admin policy create local sos-evidence-scanner /tmp/evidence-scanner.json;
+      mc admin policy attach local sos-api --user "$${S3_API_ACCESS_KEY}";
+      mc admin policy attach local sos-evidence-scanner --user "$${S3_SCANNER_ACCESS_KEY}";
+      mc ilm rule import local/$${PRIVATE_EVIDENCE_BUCKET} < /tmp/evidence-lifecycle.json;
       exit 0'
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       PRIVATE_EVIDENCE_BUCKET: ${PRIVATE_EVIDENCE_BUCKET:-sos-private-evidence}
+      EVIDENCE_RETENTION_DAYS: ${EVIDENCE_RETENTION_DAYS:-90}
+      S3_API_ACCESS_KEY: ${S3_API_ACCESS_KEY:?S3_API_ACCESS_KEY required}
+      S3_API_SECRET_KEY: ${S3_API_SECRET_KEY:?S3_API_SECRET_KEY required}
+      S3_SCANNER_ACCESS_KEY: ${S3_SCANNER_ACCESS_KEY:?S3_SCANNER_ACCESS_KEY required}
+      S3_SCANNER_SECRET_KEY: ${S3_SCANNER_SECRET_KEY:?S3_SCANNER_SECRET_KEY required}
+    volumes:
+      - ./policies:/policies:ro
+    networks: [backend]
+
+  clamav:
+    image: ${CLAMAV_IMAGE:-clamav/clamav:1.5.3-debian13-slim}
+    restart: unless-stopped
+    volumes:
+      - clamavdata:/var/lib/clamav
+    networks: [backend]
+
+  evidence-scanner:
+    build:
+      context: ./evidence-scanner
+    restart: unless-stopped
+    environment:
+      S3_ENDPOINT: http://minio:9000
+      S3_SCANNER_ACCESS_KEY: ${S3_SCANNER_ACCESS_KEY:?S3_SCANNER_ACCESS_KEY required}
+      S3_SCANNER_SECRET_KEY: ${S3_SCANNER_SECRET_KEY:?S3_SCANNER_SECRET_KEY required}
+      PRIVATE_EVIDENCE_BUCKET: ${PRIVATE_EVIDENCE_BUCKET:-sos-private-evidence}
+      EVIDENCE_SCAN_PREFIX: private/affected/
+      EVIDENCE_SCAN_POLL_SECONDS: ${EVIDENCE_SCAN_POLL_SECONDS:-2}
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      clamav:
+        condition: service_started
     networks: [backend]
 
   api:
@@ -81,10 +131,16 @@ services:
       AWS_REGION: ${AWS_REGION:-us-east-1}
       S3_ENDPOINT: http://minio:9000
       S3_FORCE_PATH_STYLE: "true"
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ACCESS_KEY_ID: ${S3_API_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_API_SECRET_KEY}
       PRIVATE_EVIDENCE_BUCKET: ${PRIVATE_EVIDENCE_BUCKET:-sos-private-evidence}
+      EVIDENCE_RETENTION_DAYS: ${EVIDENCE_RETENTION_DAYS:-90}
+      # ClamAV escribe el mismo tag de contrato que GuardDuty, pero el provider real es local/tagged S3.
+      EVIDENCE_MALWARE_SCAN_MODE: TAGGED_S3
+      REQUIRE_MALWARE_SCAN: ${REQUIRE_MALWARE_SCAN:-true}
       IDENTITY_HASH_SECRET: ${IDENTITY_HASH_SECRET:?IDENTITY_HASH_SECRET required}
+      LIVENESS_PROVIDER: ${LIVENESS_PROVIDER:-MANUAL}
+      LIVENESS_MAX_ATTEMPTS_PER_24H: ${LIVENESS_MAX_ATTEMPTS_PER_24H:-3}
       ALLOW_LEGACY_COMMAND_TOKEN: ${ALLOW_LEGACY_COMMAND_TOKEN:-true}
       COMMAND_CENTER_TOKEN: ${COMMAND_CENTER_TOKEN:?COMMAND_CENTER_TOKEN required}
       FEATURE_PUBLIC_SOS: ${FEATURE_PUBLIC_SOS:-true}
@@ -105,6 +161,8 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      evidence-scanner:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/v1/health"]
       interval: 10s
@@ -118,6 +176,8 @@ services:
       args:
         NEXT_PUBLIC_API_URL: /api/v1
         NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE: ${NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE:-false}
+        NEXT_PUBLIC_FEATURE_LIVENESS: ${NEXT_PUBLIC_FEATURE_LIVENESS:-false}
+        NEXT_PUBLIC_LIVENESS_PROVIDER: ${NEXT_PUBLIC_LIVENESS_PROVIDER:-MANUAL}
         NEXT_PUBLIC_MAP_STYLE_URL: ${NEXT_PUBLIC_MAP_STYLE_URL:-https://demotiles.maplibre.org/style.json}
     restart: unless-stopped
     depends_on:
@@ -153,5 +213,6 @@ volumes:
   pgdata:
   redisdata:
   miniodata:
+  clamavdata:
   caddy_data:
   caddy_config:
