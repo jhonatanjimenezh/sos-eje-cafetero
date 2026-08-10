@@ -10,6 +10,7 @@ import {
   PresignPetCasePhotoDto,
   PresignPetClaimEvidenceDto,
 } from './dto';
+import { PetsContactService } from './pets-contact.service';
 import { PetsOriginGuard } from './pets-origin.guard';
 import { PetsService } from './pets.service';
 
@@ -31,7 +32,10 @@ export class PublicPetsController {
 @Controller('pets')
 @UseGuards(JwtAuthGuard, PetsOriginGuard)
 export class PrivatePetsController {
-  constructor(private readonly service: PetsService) {}
+  constructor(
+    private readonly service: PetsService,
+    private readonly contacts: PetsContactService,
+  ) {}
 
   @Post('profiles')
   createProfile(@Req() req: any, @Body() dto: CreatePetProfileDto) {
@@ -111,6 +115,11 @@ export class PrivatePetsController {
   @Get('owner/inbox/:claimId/evidence')
   ownerEvidence(@Req() req: any, @Param('claimId') claimId: string) {
     return this.service.ownerEvidence(String(req.auth.sub), claimId);
+  }
+
+  @Get('owner/inbox/:claimId/finder-contact')
+  ownerFinderContact(@Req() req: any, @Param('claimId') claimId: string) {
+    return this.contacts.ownerGetsFinderContact(String(req.auth.sub), claimId);
   }
 
   @Post('owner/inbox/:claimId/action')
