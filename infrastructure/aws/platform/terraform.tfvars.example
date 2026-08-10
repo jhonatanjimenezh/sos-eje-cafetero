@@ -37,10 +37,11 @@ liveness_provider             = "REKOGNITION"
 liveness_max_attempts_per_24h = 3
 
 # SecureEnvelope. Mensajes estructurados pequeños: no fotos/videos en relay V1.
-sync_max_envelope_ttl_seconds   = 259200
-sync_max_ciphertext_bytes       = 12288
-sync_max_batch_size             = 4
-sync_batch_requests_per_minute  = 30
+sync_max_envelope_ttl_seconds  = 259200
+sync_max_ciphertext_bytes      = 12288
+sync_max_batch_size            = 4
+# Límite suplementario por emitterKeyId, no por IP; evita castigar carrier NAT compartido.
+sync_batch_requests_per_minute = 60
 
 # Safe mode: habilitar una capacidad solo después de superar su gate.
 feature_affected_identity   = false
