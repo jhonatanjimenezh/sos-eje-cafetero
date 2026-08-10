@@ -1,1 +1,22 @@
-import './globals.css'; import 'maplibre-gl/dist/maplibre-gl.css'; export const metadata={title:'SOS Eje Cafetero',description:'Centro unificado de respuesta a emergencias'}; export default function RootLayout({children}:{children:React.ReactNode}){return <html lang="es"><body>{children}</body></html>}
+import type { Metadata } from 'next';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import './globals.css';
+import PwaBootstrap from './components/PwaBootstrap';
+
+export const metadata: Metadata = {
+  title: 'SOS Eje Cafetero',
+  description: 'Centro unificado de respuesta a emergencias',
+  manifest: '/manifest.webmanifest',
+  applicationName: 'SOS Eje Cafetero',
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="es">
+      <body>
+        <PwaBootstrap />
+        {children}
+      </body>
+    </html>
+  );
+}
