@@ -7,6 +7,8 @@ REGION="${TF_VAR_aws_region:-us-east-1}"
 
 WEB_BUCKET="$(terraform -chdir="$PLATFORM" output -raw web_bucket)"
 DISTRIBUTION="$(terraform -chdir="$PLATFORM" output -raw cloudfront_distribution_id)"
+FEATURE_LIVENESS="$(terraform -chdir="$PLATFORM" output -raw feature_liveness)"
+LIVENESS_PROVIDER="$(terraform -chdir="$PLATFORM" output -raw liveness_provider)"
 TAG="sos-eje-cafetero-web-build:$(git -C "$ROOT" rev-parse --short=12 HEAD)"
 TMP="$(mktemp -d)"
 CID=""
@@ -15,6 +17,8 @@ trap 'test -z "$CID" || docker rm -f "$CID" >/dev/null 2>&1 || true; rm -rf "$TM
 docker build \
   --build-arg NEXT_PUBLIC_API_URL=/api/v1 \
   --build-arg NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE="${NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE:-false}" \
+  --build-arg NEXT_PUBLIC_FEATURE_LIVENESS="$FEATURE_LIVENESS" \
+  --build-arg NEXT_PUBLIC_LIVENESS_PROVIDER="$LIVENESS_PROVIDER" \
   --build-arg NEXT_PUBLIC_MAP_STYLE_URL="${NEXT_PUBLIC_MAP_STYLE_URL:-https://demotiles.maplibre.org/style.json}" \
   -t "$TAG" "$ROOT/apps/web"
 
@@ -28,3 +32,4 @@ aws s3 cp "$TMP" "s3://$WEB_BUCKET" --region "$REGION" --recursive \
 aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths '/*' >/dev/null
 
 echo "Web desplegada: $(terraform -chdir="$PLATFORM" output -raw public_url)"
+echo "Liveness web: enabled=$FEATURE_LIVENESS provider=$LIVENESS_PROVIDER"
