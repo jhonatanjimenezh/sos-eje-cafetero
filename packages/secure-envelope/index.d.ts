@@ -27,6 +27,7 @@ export type SyncReceiptStatus = 'ACCEPTED' | 'ALREADY_PROCESSED' | 'REJECTED';
 
 export interface SyncReceiptV1 {
   version: 1;
+  emitterKeyId: string;
   messageId: string;
   ciphertextSha256: string;
   status: SyncReceiptStatus;
