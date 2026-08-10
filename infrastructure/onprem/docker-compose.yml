@@ -135,8 +135,8 @@ services:
       AWS_SECRET_ACCESS_KEY: ${S3_API_SECRET_KEY}
       PRIVATE_EVIDENCE_BUCKET: ${PRIVATE_EVIDENCE_BUCKET:-sos-private-evidence}
       EVIDENCE_RETENTION_DAYS: ${EVIDENCE_RETENTION_DAYS:-90}
-      # Contrato compatible: GuardDuty en AWS y ClamAV on-prem escriben GuardDutyMalwareScanStatus.
-      EVIDENCE_MALWARE_SCAN_MODE: GUARDDUTY
+      # ClamAV escribe el mismo tag de contrato que GuardDuty, pero el provider real es local/tagged S3.
+      EVIDENCE_MALWARE_SCAN_MODE: TAGGED_S3
       REQUIRE_MALWARE_SCAN: ${REQUIRE_MALWARE_SCAN:-true}
       IDENTITY_HASH_SECRET: ${IDENTITY_HASH_SECRET:?IDENTITY_HASH_SECRET required}
       LIVENESS_PROVIDER: ${LIVENESS_PROVIDER:-MANUAL}
