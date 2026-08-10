@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DecryptCommand, GetPublicKeyCommand, KMSClient, SignCommand } from '@aws-sdk/client-kms';
 import {
   constants,
+  createHash,
   createPrivateKey,
   createPublicKey,
   privateDecrypt,
@@ -20,6 +21,10 @@ function b64url(bytes: Uint8Array | Buffer): string {
   return Buffer.from(bytes).toString('base64url');
 }
 
+function spkiFingerprint(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('base64url');
+}
+
 @Injectable()
 export class SyncCryptoService {
   private readonly kms = new KMSClient({ region: process.env.AWS_REGION ?? 'us-east-1' });
@@ -27,14 +32,6 @@ export class SyncCryptoService {
 
   private mode() {
     return (process.env.SYNC_KEY_MODE ?? 'LOCAL_PEM').toUpperCase();
-  }
-
-  private encryptionPublicId() {
-    return process.env.SYNC_ENCRYPTION_KEY_PUBLIC_ID ?? 'sync-encryption-v1';
-  }
-
-  private receiptPublicId() {
-    return process.env.SYNC_RECEIPT_SIGNING_KEY_PUBLIC_ID ?? 'sync-receipt-v1';
   }
 
   private readPrivateKey(pathVar: string, inlineVar: string) {
@@ -82,9 +79,11 @@ export class SyncCryptoService {
     this.cachedConfig = {
       version: 1,
       cryptoSuite: CRYPTO_SUITE,
-      encryptionKeyId: this.encryptionPublicId(),
+      // IDs derivados del material público real: si una key cambia/regenera, cambia
+      // automáticamente su ID y un cliente con la key anterior no la confunde con la nueva.
+      encryptionKeyId: spkiFingerprint(encryptionSpki),
       encryptionPublicKeySpki: b64url(encryptionSpki),
-      receiptSigningKeyId: this.receiptPublicId(),
+      receiptSigningKeyId: spkiFingerprint(receiptSpki),
       receiptSignatureSuite: RECEIPT_SIGNATURE_SUITE,
       receiptSigningPublicKeySpki: b64url(receiptSpki),
       maxEnvelopeTtlSeconds: Number(process.env.SYNC_MAX_ENVELOPE_TTL_SECONDS ?? 259200),
