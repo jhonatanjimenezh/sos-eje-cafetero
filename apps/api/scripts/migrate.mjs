@@ -3,7 +3,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 const { Pool } = pg;
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+const dbConfig = process.env.DATABASE_URL
+  ? { connectionString: process.env.DATABASE_URL }
+  : {
+      host: process.env.DB_HOST ?? 'localhost',
+      port: Number(process.env.DB_PORT ?? 5432),
+      database: process.env.DB_NAME ?? 'sos',
+      user: process.env.DB_USER ?? 'sos',
+      password: process.env.DB_PASSWORD,
+      ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+    };
+
+const pool = new Pool(dbConfig);
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dir = path.resolve(root, '../migrations');
 await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
