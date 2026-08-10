@@ -11,8 +11,8 @@ data "aws_ec2_managed_prefix_list" "cloudfront_origin" {
 }
 
 locals {
-  name             = "${var.project_name}-${var.environment}"
-  azs              = slice(data.aws_availability_zones.available.names, 0, var.az_count)
+  name              = "${var.project_name}-${var.environment}"
+  azs               = slice(data.aws_availability_zones.available.names, 0, var.az_count)
   use_custom_domain = var.domain_name != "" && var.route53_zone_id != ""
 }
 
