@@ -15,6 +15,7 @@ set +a
 
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 DEST=${1:-"$ROOT/backups/$STAMP"}
+MC_IMAGE=${MINIO_MC_IMAGE:-minio/mc:RELEASE.2025-07-21T05-28-08Z}
 mkdir -p "$DEST/minio"
 
 echo "[1/2] PostgreSQL -> $DEST/postgres.dump"
@@ -24,7 +25,7 @@ docker compose --env-file .env exec -T db \
 echo "[2/2] MinIO -> $DEST/minio"
 docker run --rm --network sos-eje-cafetero_backend \
   -e MC_HOST_local="http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000" \
-  -v "$DEST/minio:/backup" minio/mc:latest \
+  -v "$DEST/minio:/backup" "$MC_IMAGE" \
   mirror --overwrite "local/${PRIVATE_EVIDENCE_BUCKET:-sos-private-evidence}" /backup
 
 cat > "$DEST/metadata.txt" <<EOF
