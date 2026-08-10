@@ -31,6 +31,12 @@ export interface SyncReceiptV1 {
   messageId: string;
   ciphertextSha256: string;
   status: SyncReceiptStatus;
+  /**
+   * true only after the server successfully verified the emitter ECDSA signature.
+   * A REJECTED receipt with false is diagnostic/non-terminal and MUST NOT purge
+   * the legitimate local ciphertext because a hostile relay may have altered a copy.
+   */
+  emitterAuthenticated: boolean;
   receivedAt: string;
   publicEntityId?: string;
   reasonCode?: string;
