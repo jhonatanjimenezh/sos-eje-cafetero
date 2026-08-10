@@ -8,6 +8,7 @@ on:
       - 'apps/web/Dockerfile'
       - 'apps/api/src/database/**'
       - 'apps/api/scripts/migrate.mjs'
+      - 'apps/api/src/affected/affected.service.ts'
       - '.github/workflows/iac-validate.yml'
   push:
     branches: [main]
@@ -25,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: '1.13.0'
+          terraform_version: '1.15.8'
       - name: Terraform format
         run: terraform fmt -check -recursive infrastructure/aws
       - name: Validate bootstrap
@@ -38,6 +39,10 @@ jobs:
         run: |
           terraform init -backend=false
           terraform validate
+      - name: Validate shell syntax
+        run: |
+          bash -n infrastructure/aws/scripts/*.sh
+          sh -n infrastructure/onprem/scripts/*.sh
 
   compose:
     runs-on: ubuntu-latest
