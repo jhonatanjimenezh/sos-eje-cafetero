@@ -53,6 +53,14 @@ function notifyOutboxChanged() {
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('sos-outbox-changed'));
 }
 
+function receiptForEnvelope(receipts: SyncReceiptV1[], envelope: SecureEnvelopeV1) {
+  return receipts.find((candidate) =>
+    candidate.emitterKeyId === envelope.emitterKeyId &&
+    candidate.messageId === envelope.messageId &&
+    candidate.ciphertextSha256 === envelope.ciphertextSha256,
+  );
+}
+
 async function readError(response: Response): Promise<string> {
   try {
     const body = await response.json();
@@ -160,8 +168,8 @@ export async function submitIncidentResilient(
   if (canTryNetwork) {
     const result = await postEnvelopeBatch([envelope], apiBase);
     if (result.kind === 'success') {
-      const receipt = result.receipts.find((candidate) => candidate.messageId === envelope.messageId);
-      if (!receipt) throw new Error('El servidor no devolvió un recibo para este reporte.');
+      const receipt = receiptForEnvelope(result.receipts, envelope);
+      if (!receipt) throw new Error('El servidor no devolvió un recibo ligado criptográficamente a este reporte.');
       await verifyServerReceipt(receipt, envelope, apiBase);
       if (receipt.status === 'REJECTED') throw new Error(`Reporte rechazado de forma segura: ${receipt.reasonCode ?? 'UNKNOWN'}`);
       await saveReceipt(receipt);
@@ -208,7 +216,7 @@ export async function syncPendingIncidents(apiBase = DEFAULT_API, limit = 50): P
     }
 
     for (const item of group) {
-      const receipt = result.receipts.find((candidate) => candidate.messageId === item.envelope.messageId);
+      const receipt = receiptForEnvelope(result.receipts, item.envelope);
       if (!receipt) {
         if (item.own) await markEnvelopeAttempt(item.envelope.messageId, 'MISSING_RECEIPT');
         summary.retryableFailures += 1;
