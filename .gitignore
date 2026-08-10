@@ -7,3 +7,17 @@ dist
 coverage
 *.log
 .DS_Store
+
+# Terraform local state/cache/real variable files
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+infrastructure/aws/platform/backend.hcl
+infrastructure/aws/.api-image
+
+# On-prem local secrets/backups
+infrastructure/onprem/.env
+infrastructure/onprem/backups/
