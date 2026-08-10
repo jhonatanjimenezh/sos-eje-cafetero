@@ -9,18 +9,23 @@ WEB_BUCKET="$(terraform -chdir="$PLATFORM" output -raw web_bucket)"
 DISTRIBUTION="$(terraform -chdir="$PLATFORM" output -raw cloudfront_distribution_id)"
 FEATURE_LIVENESS="$(terraform -chdir="$PLATFORM" output -raw feature_liveness)"
 LIVENESS_PROVIDER="$(terraform -chdir="$PLATFORM" output -raw liveness_provider)"
+FEATURE_SECURE_ENVELOPE="$(terraform -chdir="$PLATFORM" output -raw feature_secure_envelope)"
+FEATURE_WEBRTC_RELAY="$(terraform -chdir="$PLATFORM" output -raw feature_webrtc_relay)"
 TAG="sos-eje-cafetero-web-build:$(git -C "$ROOT" rev-parse --short=12 HEAD)"
 TMP="$(mktemp -d)"
 CID=""
 trap 'test -z "$CID" || docker rm -f "$CID" >/dev/null 2>&1 || true; rm -rf "$TMP"' EXIT
 
 docker build \
+  -f "$ROOT/apps/web/Dockerfile" \
   --build-arg NEXT_PUBLIC_API_URL=/api/v1 \
-  --build-arg NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE="${NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE:-false}" \
+  --build-arg NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE="${NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE:-$FEATURE_SECURE_ENVELOPE}" \
+  --build-arg NEXT_PUBLIC_FEATURE_SECURE_ENVELOPE="$FEATURE_SECURE_ENVELOPE" \
+  --build-arg NEXT_PUBLIC_FEATURE_WEBRTC_RELAY="$FEATURE_WEBRTC_RELAY" \
   --build-arg NEXT_PUBLIC_FEATURE_LIVENESS="$FEATURE_LIVENESS" \
   --build-arg NEXT_PUBLIC_LIVENESS_PROVIDER="$LIVENESS_PROVIDER" \
   --build-arg NEXT_PUBLIC_MAP_STYLE_URL="${NEXT_PUBLIC_MAP_STYLE_URL:-https://demotiles.maplibre.org/style.json}" \
-  -t "$TAG" "$ROOT/apps/web"
+  -t "$TAG" "$ROOT"
 
 CID="$(docker create "$TAG")"
 docker cp "$CID:/usr/share/nginx/html/." "$TMP/"
@@ -33,3 +38,4 @@ aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths '/*
 
 echo "Web desplegada: $(terraform -chdir="$PLATFORM" output -raw public_url)"
 echo "Liveness web: enabled=$FEATURE_LIVENESS provider=$LIVENESS_PROVIDER"
+echo "Secure offline web: envelope=$FEATURE_SECURE_ENVELOPE relay=$FEATURE_WEBRTC_RELAY"
