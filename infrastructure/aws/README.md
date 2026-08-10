@@ -19,6 +19,8 @@ S3 web privado       ALB (solo CloudFront)
           backups
 
 Cognito Essentials + SMS OTP
+Rekognition Face Liveness (opcional por feature flag)
+GuardDuty Malware Protection for S3
 SQS + DLQ
 CloudWatch + SNS alarms
 ```
@@ -30,7 +32,7 @@ CloudWatch + SNS alarms
 - Terraform >= 1.13;
 - Docker;
 - Git;
-- permisos para VPC, IAM, ECS, ECR, RDS, ElastiCache, S3, KMS, Cognito, CloudFront, WAF, Route53/ACM (si usa dominio), SQS, SNS y CloudWatch.
+- permisos para los servicios definidos por Terraform, incluyendo IAM, Rekognition y GuardDuty si identidad/liveness se habilitan.
 
 No hay claves AWS en el repositorio.
 
@@ -39,24 +41,12 @@ No hay claves AWS en el repositorio.
 Desde la raíz:
 
 ```bash
-# 1. State remoto + ECR
 bash infrastructure/aws/scripts/01-bootstrap.sh
-
-# 2. API -> ECR con tag basado en commit
 bash infrastructure/aws/scripts/02-build-push-api.sh
-
-# 3. Copiar variables y revisar capacidad/dominio
-cp infrastructure/aws/platform/terraform.tfvars.example \
-   infrastructure/aws/platform/terraform.tfvars
+cp infrastructure/aws/platform/terraform.tfvars.example infrastructure/aws/platform/terraform.tfvars
 $EDITOR infrastructure/aws/platform/terraform.tfvars
-
-# 4. Plan + apply de la plataforma
 bash infrastructure/aws/scripts/03-apply-platform.sh
-
-# 5. Build estático y publicación S3/CloudFront
 bash infrastructure/aws/scripts/04-deploy-web.sh
-
-# 6. Verificación básica
 bash infrastructure/aws/scripts/05-smoke-test.sh
 ```
 
@@ -64,18 +54,14 @@ El `03-apply-platform.sh` siempre genera un plan antes del apply.
 
 ## Terraform state
 
-`bootstrap/` se ejecuta una sola vez por cuenta/proyecto y crea:
-- bucket S3 versionado y privado;
-- KMS para cifrado;
-- ECR API.
+`bootstrap/` se ejecuta una sola vez por cuenta/proyecto y crea bucket S3 versionado/privado, KMS y ECR API. El script genera `platform/backend.hcl`, ignorado por Git, para state remoto con locking S3.
 
-El script genera `platform/backend.hcl`, que está ignorado por Git y activa locking nativo de state mediante S3.
-
-El state de bootstrap permanece local; la entidad debe custodiarlo o migrarlo a su sistema de state corporativo. No contiene credenciales AWS, pero sigue siendo información sensible de infraestructura.
+El state de bootstrap permanece local; la entidad debe custodiarlo o migrarlo a su backend corporativo. Aunque no sea una credencial, sigue siendo información sensible de infraestructura.
 
 ## Alta disponibilidad
 
 Defaults de producción:
+
 - 2 AZ mínimo;
 - NAT por AZ (`single_nat_gateway=false`);
 - ECS desired/min = 2;
@@ -85,7 +71,7 @@ Defaults de producción:
 - RDS backup 14 días;
 - autoscaling ECS por CPU/memoria.
 
-Para un piloto económico se puede usar `single_nat_gateway=true`, pero eso reduce resiliencia de salida de las tareas privadas.
+Para un piloto económico puede usarse `single_nat_gateway=true`, reduciendo resiliencia de salida.
 
 ## Dominio
 
@@ -96,8 +82,6 @@ domain_name     = ""
 route53_zone_id = ""
 ```
 
-CloudFront entrega una URL `https://xxxxx.cloudfront.net`.
-
 Con Route53:
 
 ```hcl
@@ -105,34 +89,91 @@ domain_name     = "sos.ejemplo.gov.co"
 route53_zone_id = "Z012345..."
 ```
 
-Terraform solicita ACM en `us-east-1`, crea la validación DNS y A/AAAA hacia CloudFront.
+Terraform solicita ACM en `us-east-1`, crea validación DNS y A/AAAA hacia CloudFront.
 
 ## SMS OTP — paso externo obligatorio
 
-Terraform crea Cognito Essentials con `SMS_OTP`, el app client `ALLOW_USER_AUTH` y el rol SNS requerido. Sin embargo, una cuenta nueva puede estar en el sandbox de AWS End User Messaging SMS. La entidad operadora debe completar el proceso AWS para poder enviar a teléfonos reales y definir límites/protecciones anti-fraude antes de habilitar OTP públicamente.
+Terraform crea Cognito Essentials con `SMS_OTP`, app client `ALLOW_USER_AUTH` y rol SNS. La entidad operadora debe completar requisitos de envío SMS de su cuenta, cuotas y protecciones antifraude antes de habilitar OTP para usuarios reales.
 
 El endpoint SOS público no depende de Cognito.
+
+## Identidad de damnificados
+
+La infraestructura entrega la capacidad, pero queda apagada por defecto:
+
+```hcl
+feature_affected_identity = false
+feature_liveness          = false
+```
+
+Antes de habilitarla leer:
+
+- `docs/security/IDENTITY_VERIFICATION_POLICY.md`;
+- `docs/operations/IDENTITY_VERIFICATION_RUNBOOK.md`;
+- `docs/operations/PRODUCTION_GATES.md`.
+
+La regla central es que OTP, documento, GPS, liveness y antimalware son señales. Solo un funcionario autorizado puede cambiar un expediente pendiente a `VERIFIED` o `REJECTED`. Matching y aprobación de ayudas revalidan `VERIFIED`.
+
+## Face Liveness
+
+Configuración AWS:
+
+```hcl
+feature_liveness                = true
+liveness_provider               = "REKOGNITION"
+liveness_max_attempts_per_24h   = 3
+```
+
+El backend:
+
+1. crea la sesión de Face Liveness;
+2. asume un rol específico para generar credenciales STS temporales;
+3. el rol del navegador solo permite `rekognition:StartFaceLivenessSession`;
+4. obtiene el resultado desde backend;
+5. guarda provider status/confidence como señal para revisión humana.
+
+No existe un threshold Terraform/API que auto-apruebe o auto-rechace beneficiarios.
+
+La web recibe `feature_liveness` y `liveness_provider` desde outputs de Terraform durante `04-deploy-web.sh`; así no puede quedar accidentalmente compilada con una configuración distinta a la plataforma.
 
 ## Evidencia sensible
 
 - bucket separado y privado;
 - Block Public Access completo;
-- SSE-KMS por defecto;
-- IAM de ECS limitado al prefijo `private/*`;
+- SSE-KMS;
+- IAM ECS limitado a evidencia privada requerida;
 - lifecycle configurable;
-- CORS configurable.
+- CORS configurable;
+- checksum, MIME/tamaño y magic-bytes validados por aplicación;
+- acceso oficial con motivo + auditoría;
+- URL de descarga oficial de vida corta.
 
-Antes de habilitar `feature_affected_identity=true`, reemplazar:
+Antes de identidad real cambiar:
 
 ```hcl
-evidence_cors_origins = ["*"]
+evidence_cors_origins = ["https://sos.ejemplo.gov.co"]
+evidence_retention_days = 90 # o la política aprobada por la entidad
+enable_guardduty_malware_protection = true
+require_malware_scan = true
 ```
 
-por el origen exacto de producción y aprobar la política institucional de retención.
+El valor de retención es técnico; la entidad debe aprobar el período correspondiente.
+
+## GuardDuty Malware Protection
+
+Terraform crea un Malware Protection Plan para:
+
+```text
+s3://<evidence-bucket>/private/affected/
+```
+
+El rol del servicio se limita a configuración necesaria de EventBridge/S3, lectura/tagging del prefijo y uso de KMS mediante S3. El plan habilita tagging y el API consume `GuardDutyMalwareScanStatus`.
+
+Con scanner requerido, un objeto que no esté `NO_THREATS_FOUND` no puede convertirse en evidencia elegible del expediente ni generar descarga oficial mediante el API.
 
 ## Safe Mode
 
-Defaults recomendados para primer despliegue:
+Primer despliegue recomendado:
 
 ```hcl
 feature_affected_identity   = false
@@ -143,28 +184,26 @@ feature_operational_layers  = false
 feature_secure_envelope     = false
 ```
 
-Y compilar la web con:
+Y:
 
 ```text
 NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE=false
 ```
 
-Esto permite desplegar el core sin activar capacidades que todavía no superaron su gate.
+Las capacidades se habilitan únicamente después de superar su gate.
 
 ## Rollback de API
 
-Cada imagen ECR usa un tag de commit e inmutabilidad. Para volver a una versión anterior:
+Cada imagen ECR usa tag de commit/inmutabilidad. Para volver a una versión anterior:
 
-1. identificar el tag anterior en ECR;
+1. identificar tag anterior;
 2. cambiar `api_image`/`.api-image`;
 3. ejecutar `03-apply-platform.sh`;
-4. ECS hace rolling deployment y su circuit breaker revierte automáticamente si el nuevo deployment no estabiliza.
+4. ECS hace rolling deployment y circuit breaker revierte si no estabiliza.
 
 ## Restore RDS
 
-Ver `docs/operations/AWS_RESTORE_RUNBOOK.md`.
-
-La IaC deja backups configurados, pero **Issue #1 no debe considerarse completamente validada hasta que la entidad ejecute un restore drill real en su cuenta** y registre evidencia del resultado.
+Ver `docs/operations/AWS_RESTORE_RUNBOOK.md` y la aceptación operacional externa de infraestructura en #17.
 
 ## Destroy
 
