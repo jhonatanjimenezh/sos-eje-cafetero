@@ -18,7 +18,7 @@ if aws ecr describe-images --region "$REGION" --repository-name "$REPOSITORY" --
   echo "La imagen ya existe y ECR es inmutable: $IMAGE"
 else
   aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
-  docker build -t "$IMAGE" "$ROOT/apps/api"
+  docker build -f "$ROOT/apps/api/Dockerfile" -t "$IMAGE" "$ROOT"
   docker push "$IMAGE"
 fi
 
