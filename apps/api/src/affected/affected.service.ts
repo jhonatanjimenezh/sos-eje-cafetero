@@ -2,11 +2,12 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   NotFoundException,
   ServiceUnavailableException,
-  TooManyRequestsException,
 } from '@nestjs/common';
 import { createHmac, randomInt, randomUUID } from 'node:crypto';
 import { Pool, PoolClient } from 'pg';
@@ -68,7 +69,7 @@ export class AffectedService {
   private documentHash(type: string, number: string) {
     const secret = process.env.IDENTITY_HASH_SECRET;
     if (!secret) throw new ServiceUnavailableException('IDENTITY_HASH_SECRET no configurado');
-    const normalized = `${type}:${String(number).toUpperCase().replace(/[^A-Z0-9]/g,'')}`;
+    const normalized = `${type}:${String(number).toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
     return createHmac('sha256', secret).update(normalized).digest('hex');
   }
 
@@ -92,7 +93,7 @@ export class AffectedService {
   }
 
   private assertVerifier(official: any) {
-    if (!['VERIFIER','COORDINATOR','ADMIN'].includes(official.role)) {
+    if (!['VERIFIER', 'COORDINATOR', 'ADMIN'].includes(official.role)) {
       throw new ForbiddenException('Rol insuficiente para revisar identidad o evidencia sensible');
     }
   }
@@ -109,10 +110,10 @@ export class AffectedService {
 
   private detectContentType(bytes: Uint8Array): string | null {
     if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-    if (bytes.length >= 8 && [0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a].every((v,i) => bytes[i] === v)) return 'image/png';
+    if (bytes.length >= 8 && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((v, i) => bytes[i] === v)) return 'image/png';
     const ascii = (start: number, end: number) => Buffer.from(bytes.slice(start, end)).toString('ascii');
-    if (bytes.length >= 12 && ascii(0,4) === 'RIFF' && ascii(8,12) === 'WEBP') return 'image/webp';
-    if (bytes.length >= 8 && ascii(4,8) === 'ftyp') return 'video/mp4';
+    if (bytes.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'image/webp';
+    if (bytes.length >= 8 && ascii(4, 8) === 'ftyp') return 'video/mp4';
     if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return 'video/webm';
     return null;
   }
@@ -123,7 +124,7 @@ export class AffectedService {
   }
 
   private async securityScanStatus(bucket: string, key: string) {
-    if (this.malwareMode() !== 'GUARDDUTY') return 'NOT_CONFIGURED';
+    if (!['GUARDDUTY', 'TAGGED_S3'].includes(this.malwareMode())) return 'NOT_CONFIGURED';
     const tags = await this.s3.send(new GetObjectTaggingCommand({ Bucket: bucket, Key: key }));
     return tags.TagSet?.find(tag => tag.Key === 'GuardDutyMalwareScanStatus')?.Value ?? 'PENDING';
   }
@@ -133,12 +134,12 @@ export class AffectedService {
     if (!identity.rowCount) throw new ForbiddenException('Identidad OTP no registrada');
 
     const existing = await this.db.query('SELECT id,verification_status FROM affected_profiles WHERE auth_subject=$1', [subject]);
-    if (existing.rowCount && ['VERIFIED','PENDING_OFFICIAL_VERIFICATION','REJECTED'].includes(existing.rows[0].verification_status)) {
+    if (existing.rowCount && ['VERIFIED', 'PENDING_OFFICIAL_VERIFICATION', 'REJECTED'].includes(existing.rows[0].verification_status)) {
       throw new ForbiddenException('Este expediente no admite cambios directos en su estado actual; use corrección o apelación');
     }
 
     const hash = this.documentHash(dto.documentType, dto.documentNumber);
-    const normalizedDoc = dto.documentNumber.replace(/\D/g,'') || dto.documentNumber.replace(/\s/g,'');
+    const normalizedDoc = dto.documentNumber.replace(/\D/g, '') || dto.documentNumber.replace(/\s/g, '');
     const last4 = normalizedDoc.slice(-4).padStart(4, '*');
     try {
       const r = await this.db.query(`INSERT INTO affected_profiles(
@@ -150,7 +151,7 @@ export class AffectedService {
           location=excluded.location,city=excluded.city,neighborhood=excluded.neighborhood,household_size=excluded.household_size,
           notes=excluded.notes,consent_sensitive_data_at=now(),consent_version=excluded.consent_version,updated_at=now()
         RETURNING id,public_id,full_name,document_type,document_last4,address,city,neighborhood,household_size,verification_status,created_at`,
-        [subject,dto.fullName.trim(),dto.documentType,hash,last4,dto.address.trim(),dto.lat,dto.lng,dto.city??'Manizales',dto.neighborhood??null,dto.householdSize,dto.notes??null,dto.consentVersion]);
+        [subject, dto.fullName.trim(), dto.documentType, hash, last4, dto.address.trim(), dto.lat, dto.lng, dto.city ?? 'Manizales', dto.neighborhood ?? null, dto.householdSize, dto.notes ?? null, dto.consentVersion]);
       await this.audit(this.db, {
         actorSubject: subject,
         action: existing.rowCount ? 'AFFECTED_PROFILE_CORRECTED' : 'AFFECTED_PROFILE_CREATED',
@@ -182,19 +183,23 @@ export class AffectedService {
     if (this.livenessProvider() !== 'MANUAL') throw new BadRequestException('El despliegue usa un proveedor de liveness especializado');
     await this.assertOwner(profileId, subject);
     const code = randomInt(100, 999);
-    const direction = ['izquierda','derecha'][randomInt(0,2)];
+    const direction = ['izquierda', 'derecha'][randomInt(0, 2)];
     const text = `Mire al frente, gire lentamente el rostro hacia la ${direction}, vuelva al centro y diga en voz alta el código ${code}.`;
     const client = await this.db.connect();
     try {
       await client.query('BEGIN');
       const r = await client.query(`INSERT INTO verification_challenges(affected_profile_id,challenge_text,expires_at)
-        VALUES($1,$2,now()+interval '10 minutes') RETURNING id,challenge_text,expires_at`, [profileId,text]);
-      await client.query(`UPDATE affected_profiles SET liveness_provider='MANUAL',liveness_challenge_id=$2,liveness_status='CHALLENGE_ISSUED',updated_at=now() WHERE id=$1`, [profileId,r.rows[0].id]);
+        VALUES($1,$2,now()+interval '10 minutes') RETURNING id,challenge_text,expires_at`, [profileId, text]);
+      await client.query(`UPDATE affected_profiles SET liveness_provider='MANUAL',liveness_challenge_id=$2,liveness_status='CHALLENGE_ISSUED',updated_at=now() WHERE id=$1`, [profileId, r.rows[0].id]);
       await this.audit(client, { actorSubject: subject, action: 'MANUAL_LIVENESS_CHALLENGE_CREATED', entityType: 'affected_profile', entityId: profileId });
       await client.query('COMMIT');
       return r.rows[0];
-    } catch(e) { await client.query('ROLLBACK'); throw e; }
-    finally { client.release(); }
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   async createProviderLivenessSession(profileId: string, subject: string, dto: LivenessConsentDto) {
@@ -205,7 +210,9 @@ export class AffectedService {
     const maxAttempts = Number(process.env.LIVENESS_MAX_ATTEMPTS_PER_24H ?? 3);
     const attempts = await this.db.query(`SELECT count(*)::int count FROM liveness_sessions
       WHERE affected_profile_id=$1 AND created_at > now()-interval '24 hours'`, [profileId]);
-    if (attempts.rows[0].count >= maxAttempts) throw new TooManyRequestsException('Se alcanzó el máximo de intentos de liveness; requiere revisión oficial');
+    if (attempts.rows[0].count >= maxAttempts) {
+      throw new HttpException('Se alcanzó el máximo de intentos de liveness; requiere revisión oficial', HttpStatus.TOO_MANY_REQUESTS);
+    }
 
     const requestToken = randomUUID();
     const created = await this.rekognition.createSession({ profileId, requestToken });
@@ -215,11 +222,11 @@ export class AffectedService {
       await client.query('BEGIN');
       await client.query(`INSERT INTO liveness_sessions(
         affected_profile_id,provider,provider_session_id,status,attempt_number,consent_version,expires_at)
-        VALUES($1,$2,$3,'CREATED',$4,$5,$6)`, [profileId,created.provider,created.sessionId,attemptNumber,dto.consentVersion,created.expiresAt]);
+        VALUES($1,$2,$3,'CREATED',$4,$5,$6)`, [profileId, created.provider, created.sessionId, attemptNumber, dto.consentVersion, created.expiresAt]);
       await client.query(`UPDATE affected_profiles SET liveness_provider=$2,liveness_provider_session_id=$3,
         liveness_provider_status='CREATED',liveness_status='SESSION_CREATED',liveness_attempts=liveness_attempts+1,
         liveness_last_attempt_at=now(),liveness_consent_at=now(),liveness_consent_version=$4,updated_at=now() WHERE id=$1`,
-        [profileId,created.provider,created.sessionId,dto.consentVersion]);
+        [profileId, created.provider, created.sessionId, dto.consentVersion]);
       await this.audit(client, {
         actorSubject: subject,
         action: 'LIVENESS_SESSION_CREATED',
@@ -228,8 +235,12 @@ export class AffectedService {
         metadata: { provider: created.provider, attemptNumber, consentVersion: dto.consentVersion },
       });
       await client.query('COMMIT');
-    } catch(e) { await client.query('ROLLBACK'); throw e; }
-    finally { client.release(); }
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
 
     return created;
   }
@@ -240,7 +251,7 @@ export class AffectedService {
       throw new BadRequestException('No existe una sesión Rekognition activa para este perfil');
     }
     const session = await this.db.query(`SELECT * FROM liveness_sessions
-      WHERE affected_profile_id=$1 AND provider_session_id=$2 ORDER BY created_at DESC LIMIT 1`, [profileId,profile.liveness_provider_session_id]);
+      WHERE affected_profile_id=$1 AND provider_session_id=$2 ORDER BY created_at DESC LIMIT 1`, [profileId, profile.liveness_provider_session_id]);
     if (!session.rowCount) throw new NotFoundException('Sesión de liveness no encontrada');
     if (new Date(session.rows[0].expires_at).getTime() < Date.now()) throw new BadRequestException('La sesión de liveness expiró; genere un nuevo intento');
 
@@ -258,7 +269,7 @@ export class AffectedService {
       ]);
       await client.query(`UPDATE affected_profiles SET liveness_provider_status=$2,liveness_status=$3,
         liveness_confidence=$4,liveness_completed_at=CASE WHEN $2='SUCCEEDED' THEN now() ELSE liveness_completed_at END,
-        updated_at=now() WHERE id=$1`, [profileId,result.status,status,result.confidence]);
+        updated_at=now() WHERE id=$1`, [profileId, result.status, status, result.confidence]);
       await this.audit(client, {
         actorSubject: subject,
         action: 'LIVENESS_PROVIDER_RESULT_RECEIVED',
@@ -267,8 +278,12 @@ export class AffectedService {
         metadata: { provider: result.provider, providerStatus: result.status, confidenceRecorded: result.confidence != null },
       });
       await client.query('COMMIT');
-    } catch(e) { await client.query('ROLLBACK'); throw e; }
-    finally { client.release(); }
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
 
     return {
       status: result.status,
@@ -281,19 +296,23 @@ export class AffectedService {
     await this.assertOwner(profileId, subject);
     const bucket = process.env.PRIVATE_EVIDENCE_BUCKET;
     if (!bucket) throw new ServiceUnavailableException('PRIVATE_EVIDENCE_BUCKET no configurado');
-    const allowed = new Set(['image/jpeg','image/png','image/webp','video/webm','video/mp4','video/quicktime']);
+    const allowed = new Set(['image/jpeg', 'image/png', 'image/webp', 'video/webm', 'video/mp4', 'video/quicktime']);
     if (!allowed.has(dto.contentType)) throw new BadRequestException('Formato de evidencia no permitido');
     const max = this.evidenceMax(dto.kind);
     if (!max || dto.sizeBytes > max) throw new BadRequestException(`La evidencia ${dto.kind} excede el tamaño permitido`);
 
-    const ext = dto.contentType.includes('png')?'png':dto.contentType.includes('webp')?'webp':dto.contentType.includes('mp4')?'mp4':dto.contentType.includes('quicktime')?'mov':dto.contentType.includes('webm')?'webm':'jpg';
+    const ext = dto.contentType.includes('png') ? 'png'
+      : dto.contentType.includes('webp') ? 'webp'
+        : dto.contentType.includes('mp4') ? 'mp4'
+          : dto.contentType.includes('quicktime') ? 'mov'
+            : dto.contentType.includes('webm') ? 'webm' : 'jpg';
     const key = `private/affected/${profileId}/${dto.kind}/${randomUUID()}.${ext}`;
     const retentionDays = Number(process.env.EVIDENCE_RETENTION_DAYS ?? 90);
     const checksumBase64 = Buffer.from(dto.sha256.toLowerCase(), 'hex').toString('base64');
     const asset = await this.db.query(`INSERT INTO evidence_assets(
       affected_profile_id,kind,object_key,content_type,declared_sha256,declared_size_bytes,retention_expires_at)
       VALUES($1,$2,$3,$4,$5,$6,now()+($7::text || ' days')::interval) RETURNING id,kind,object_key`,
-      [profileId,dto.kind,key,dto.contentType,dto.sha256.toLowerCase(),dto.sizeBytes,String(retentionDays)]);
+      [profileId, dto.kind, key, dto.contentType, dto.sha256.toLowerCase(), dto.sizeBytes, String(retentionDays)]);
     const uploadUrl = await getSignedUrl(this.s3, new PutObjectCommand({
       Bucket: bucket,
       Key: key,
@@ -326,9 +345,9 @@ export class AffectedService {
     const bucket = process.env.PRIVATE_EVIDENCE_BUCKET;
     if (!bucket) throw new ServiceUnavailableException('PRIVATE_EVIDENCE_BUCKET no configurado');
 
-    const reject = async (reason: string) => {
+    const reject = async (reason: string): Promise<never> => {
       await this.s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.object_key }));
-      await this.db.query(`UPDATE evidence_assets SET upload_status='REJECTED',rejected_reason=$2 WHERE id=$1`, [assetId,reason]);
+      await this.db.query(`UPDATE evidence_assets SET upload_status='REJECTED',rejected_reason=$2 WHERE id=$1`, [assetId, reason]);
       await this.audit(this.db, { actorSubject: subject, action: 'EVIDENCE_REJECTED', entityType: 'evidence_asset', entityId: assetId, metadata: { reason } });
       throw new BadRequestException(reason);
     };
@@ -351,7 +370,7 @@ export class AffectedService {
     const scanStatus = await this.securityScanStatus(bucket, asset.object_key);
     await this.db.query(`UPDATE evidence_assets SET sha256=$2,size_bytes=$3,upload_status='COMPLETED',content_validated_at=now(),
       malware_scan_status=$4,malware_scanned_at=CASE WHEN $4 NOT IN ('PENDING','NOT_CONFIGURED') THEN now() ELSE malware_scanned_at END,
-      completed_at=now() WHERE id=$1`, [assetId,dto.sha256.toLowerCase(),dto.sizeBytes,scanStatus]);
+      completed_at=now() WHERE id=$1`, [assetId, dto.sha256.toLowerCase(), dto.sizeBytes, scanStatus]);
     if (asset.kind === 'LIVENESS_VIDEO') {
       await this.db.query(`UPDATE affected_profiles SET liveness_status='CAPTURED',updated_at=now() WHERE id=$1`, [asset.affected_profile_id]);
       if (asset.liveness_challenge_id) await this.db.query('UPDATE verification_challenges SET completed_at=now() WHERE id=$1', [asset.liveness_challenge_id]);
@@ -374,7 +393,7 @@ export class AffectedService {
     if (!bucket) throw new ServiceUnavailableException('PRIVATE_EVIDENCE_BUCKET no configurado');
     const status = await this.securityScanStatus(bucket, r.rows[0].object_key);
     await this.db.query(`UPDATE evidence_assets SET malware_scan_status=$2,
-      malware_scanned_at=CASE WHEN $2 NOT IN ('PENDING','NOT_CONFIGURED') THEN now() ELSE malware_scanned_at END WHERE id=$1`, [assetId,status]);
+      malware_scanned_at=CASE WHEN $2 NOT IN ('PENDING','NOT_CONFIGURED') THEN now() ELSE malware_scanned_at END WHERE id=$1`, [assetId, status]);
     if (status === 'THREATS_FOUND') {
       await this.audit(this.db, { actorSubject: subject, action: 'MALWARE_DETECTED', entityType: 'evidence_asset', entityId: assetId });
     }
@@ -384,18 +403,19 @@ export class AffectedService {
   async submit(profileId: string, subject: string) {
     const profile = await this.assertOwner(profileId, subject);
     if (profile.verification_status === 'VERIFIED') return { status: 'VERIFIED' };
-    if (!['DRAFT','NEEDS_INFO'].includes(profile.verification_status)) throw new BadRequestException('El expediente no está listo para un nuevo envío');
+    if (!['DRAFT', 'NEEDS_INFO'].includes(profile.verification_status)) throw new BadRequestException('El expediente no está listo para un nuevo envío');
 
+    const scanMode = this.malwareMode();
     const r = await this.db.query(`SELECT kind,upload_status,content_validated_at,malware_scan_status FROM evidence_assets
       WHERE affected_profile_id=$1 ORDER BY completed_at DESC NULLS LAST`, [profileId]);
     const secureKinds = new Set<string>();
     for (const row of r.rows) {
       if (row.upload_status !== 'COMPLETED' || !row.content_validated_at) continue;
-      if (this.malwareMode() === 'GUARDDUTY' && row.malware_scan_status !== 'NO_THREATS_FOUND') continue;
+      if (scanMode !== 'DISABLED' && row.malware_scan_status !== 'NO_THREATS_FOUND') continue;
       if (row.malware_scan_status === 'THREATS_FOUND') continue;
       secureKinds.add(row.kind);
     }
-    for (const required of ['ID_FRONT','ID_BACK']) {
+    for (const required of ['ID_FRONT', 'ID_BACK']) {
       if (!secureKinds.has(required)) throw new BadRequestException(`Falta evidencia validada y segura: ${required}`);
     }
 
@@ -409,7 +429,7 @@ export class AffectedService {
       }
     }
 
-    if (this.flag('REQUIRE_MALWARE_SCAN') && this.malwareMode() === 'DISABLED') {
+    if (this.flag('REQUIRE_MALWARE_SCAN') && scanMode === 'DISABLED') {
       throw new ServiceUnavailableException('La política exige antimalware pero no hay scanner configurado');
     }
 
@@ -428,7 +448,7 @@ export class AffectedService {
     }
     try {
       const r = await this.db.query(`INSERT INTO identity_review_requests(affected_profile_id,requested_by_subject,kind,message)
-        VALUES($1,$2,$3,$4) RETURNING id,kind,status,created_at`, [profileId,subject,dto.kind,dto.message.trim()]);
+        VALUES($1,$2,$3,$4) RETURNING id,kind,status,created_at`, [profileId, subject, dto.kind, dto.message.trim()]);
       if (dto.kind === 'NEEDS_INFO_RESPONSE') {
         await this.db.query(`UPDATE affected_profiles SET verification_status='DRAFT',updated_at=now() WHERE id=$1`, [profileId]);
       }
@@ -442,13 +462,13 @@ export class AffectedService {
 
   async resolveReviewRequest(requestId: string, official: any, dto: ResolveIdentityReviewDto) {
     this.assertVerifier(official);
-    const request = await this.db.query('SELECT * FROM identity_review_requests WHERE id=$1 AND status=$2', [requestId,'OPEN']);
+    const request = await this.db.query('SELECT * FROM identity_review_requests WHERE id=$1 AND status=$2', [requestId, 'OPEN']);
     if (!request.rowCount) throw new NotFoundException('Solicitud abierta no encontrada');
     const client = await this.db.connect();
     try {
       await client.query('BEGIN');
       await client.query(`UPDATE identity_review_requests SET status=$2,resolution_notes=$3,resolved_by_official_id=$4,resolved_at=now()
-        WHERE id=$1`, [requestId,dto.decision,dto.notes.trim(),official.id]);
+        WHERE id=$1`, [requestId, dto.decision, dto.notes.trim(), official.id]);
       if (request.rows[0].kind === 'APPEAL' && dto.decision === 'RESOLVED') {
         await client.query(`UPDATE affected_profiles SET verification_status='NEEDS_INFO',updated_at=now() WHERE id=$1`, [request.rows[0].affected_profile_id]);
       }
@@ -462,8 +482,12 @@ export class AffectedService {
       });
       await client.query('COMMIT');
       return { status: dto.decision };
-    } catch(e) { await client.query('ROLLBACK'); throw e; }
-    finally { client.release(); }
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   async identityCase(profileId: string, official: any, reason: string) {
@@ -513,7 +537,7 @@ export class AffectedService {
     if (!asset.rowCount) throw new NotFoundException();
     if (asset.rows[0].upload_status !== 'COMPLETED' || !asset.rows[0].content_validated_at) throw new ForbiddenException('Evidencia no validada');
     if (asset.rows[0].malware_scan_status === 'THREATS_FOUND') throw new ForbiddenException('Evidencia en cuarentena por malware');
-    if (this.malwareMode() === 'GUARDDUTY' && asset.rows[0].malware_scan_status !== 'NO_THREATS_FOUND') {
+    if (this.malwareMode() !== 'DISABLED' && asset.rows[0].malware_scan_status !== 'NO_THREATS_FOUND') {
       throw new ForbiddenException('El análisis antimalware todavía no autoriza esta evidencia');
     }
     const bucket = process.env.PRIVATE_EVIDENCE_BUCKET;
@@ -545,8 +569,8 @@ export class AffectedService {
     try {
       await client.query('BEGIN');
       await client.query(`INSERT INTO beneficiary_verifications(affected_profile_id,official_id,decision,method,notes)
-        VALUES($1,$2,$3,$4,$5)`, [profileId,official.id,dto.decision,dto.method??'FIELD_OR_DESK_REVIEW',dto.notes??null]);
-      await client.query(`UPDATE affected_profiles SET verification_status=$2,verified_at=CASE WHEN $2='VERIFIED' THEN now() ELSE verified_at END,updated_at=now() WHERE id=$1`, [profileId,status]);
+        VALUES($1,$2,$3,$4,$5)`, [profileId, official.id, dto.decision, dto.method ?? 'FIELD_OR_DESK_REVIEW', dto.notes ?? null]);
+      await client.query(`UPDATE affected_profiles SET verification_status=$2,verified_at=CASE WHEN $2='VERIFIED' THEN now() ELSE verified_at END,updated_at=now() WHERE id=$1`, [profileId, status]);
       await this.audit(client, {
         actorSubject: official.auth_subject,
         officialId: official.id,
@@ -557,8 +581,12 @@ export class AffectedService {
       });
       await client.query('COMMIT');
       return { status };
-    } catch(e) { await client.query('ROLLBACK'); throw e; }
-    finally { client.release(); }
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   async commandList() {
