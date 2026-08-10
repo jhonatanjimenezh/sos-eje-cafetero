@@ -1,20 +1,14 @@
-const CACHE_VERSION = 'sos-shell-v1';
-const CORE_SHELL = ['/', '/report/', '/manifest.webmanifest', '/sos-icon.svg'];
+const CACHE_VERSION = 'sos-shell-v2';
+const CORE_SHELL = ['/', '/report/', '/relay/', '/manifest.webmanifest', '/sos-icon.svg'];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches
-      .open(CACHE_VERSION)
-      .then((cache) => cache.addAll(CORE_SHELL))
-      .catch(() => undefined),
-  );
+  event.waitUntil(caches.open(CACHE_VERSION).then((cache) => cache.addAll(CORE_SHELL)).catch(() => undefined));
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches
-      .keys()
+    caches.keys()
       .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_VERSION).map((key) => caches.delete(key))))
       .then(() => self.clients.claim()),
   );
@@ -29,7 +23,8 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
-  // Nunca cachear respuestas API ni recursos de terceros. La PWA solo conserva el shell público.
+  // Boundary de seguridad: Cache Storage solo puede contener shell público.
+  // Nunca se cachean API, crypto-config, receipts, OTP, identidad, evidencia ni endpoints de mando.
   if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
 
   if (request.mode === 'navigate') {
@@ -43,15 +38,12 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(async () => {
-          return (
-            (await caches.match(request)) ||
-            (url.pathname.startsWith('/report') ? await caches.match('/report/') : undefined) ||
-            (await caches.match('/')) ||
-            new Response('Sin conexión. Abre nuevamente SOS Eje Cafetero cuando recuperes el shell.', {
-              status: 503,
-              headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-            })
-          );
+          if (url.pathname.startsWith('/report')) return (await caches.match('/report/')) || (await caches.match('/'));
+          if (url.pathname.startsWith('/relay')) return (await caches.match('/relay/')) || (await caches.match('/'));
+          return (await caches.match(request)) || (await caches.match('/')) || new Response('Sin conexión.', {
+            status: 503,
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          });
         }),
     );
     return;
@@ -77,9 +69,10 @@ self.addEventListener('fetch', (event) => {
 
 self.addEventListener('sync', (event) => {
   if (event.tag !== 'sos-outbox') return;
+  // El SW no accede al plaintext ni implementa crypto por su cuenta. Solicita a una
+  // ventana activa que ejecute el mismo pipeline SecureEnvelope versionado.
   event.waitUntil(
-    self.clients
-      .matchAll({ type: 'window', includeUncontrolled: true })
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
       .then((clients) => clients.forEach((client) => client.postMessage({ type: 'SOS_SYNC_REQUEST' }))),
   );
 });

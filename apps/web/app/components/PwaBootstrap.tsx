@@ -1,10 +1,13 @@
 'use client';
 
 import { useEffect } from 'react';
-import { requestPersistentStorage } from '../../lib/offline-db';
+import { pruneExpiredOfflineState, requestPersistentStorage } from '../../lib/offline-db';
 import { syncPendingIncidents } from '../../lib/offline-sync';
+import { prepareSecureOfflineMode } from '../../lib/secure-envelope';
 
 const OFFLINE_QUEUE_ENABLED = process.env.NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE === 'true';
+const SECURE_ENVELOPE_ENABLED = process.env.NEXT_PUBLIC_FEATURE_SECURE_ENVELOPE === 'true';
+const SECURE_OFFLINE_ENABLED = OFFLINE_QUEUE_ENABLED && SECURE_ENVELOPE_ENABLED;
 
 export default function PwaBootstrap() {
   useEffect(() => {
@@ -12,27 +15,28 @@ export default function PwaBootstrap() {
     let syncing = false;
 
     const synchronize = async () => {
-      if (!OFFLINE_QUEUE_ENABLED || disposed || syncing || !navigator.onLine) return;
+      if (!SECURE_OFFLINE_ENABLED || disposed || syncing || !navigator.onLine) return;
       syncing = true;
       try {
+        await prepareSecureOfflineMode();
+        await pruneExpiredOfflineState();
         await syncPendingIncidents();
       } catch {
-        // La cola permanece intacta. Se intentará de nuevo en el próximo trigger.
+        // Fail closed for persistence: nunca se degrada a payload plaintext.
+        // La ruta online directa sigue disponible desde el formulario.
       } finally {
         syncing = false;
       }
     };
 
-    // El service worker puede seguir cacheando el shell público aunque la cola
-    // offline sensible esté apagada. Nunca debe cachear respuestas /api/.
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => undefined);
-    }
-
-    if (!OFFLINE_QUEUE_ENABLED) return;
+    // El service worker conserva únicamente el shell público. Nunca cachea /api/.
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+    if (!SECURE_OFFLINE_ENABLED) return;
 
     requestPersistentStorage().catch(() => undefined);
-    synchronize();
+    if (navigator.onLine) prepareSecureOfflineMode().catch(() => undefined);
+    pruneExpiredOfflineState().catch(() => undefined);
+    void synchronize();
 
     const onOnline = () => void synchronize();
     const onVisibility = () => {

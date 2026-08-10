@@ -16,15 +16,26 @@ services:
     image: redis:7-alpine
     ports: ["6379:6379"]
   api:
-    build: ./apps/api
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
     env_file: .env
     ports: ["3001:3001"]
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }
   web:
-    build: ./apps/web
-    env_file: .env
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001/api/v1}
+        NEXT_PUBLIC_MAP_STYLE_URL: ${NEXT_PUBLIC_MAP_STYLE_URL:-https://demotiles.maplibre.org/style.json}
+        NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE: ${NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE:-false}
+        NEXT_PUBLIC_FEATURE_SECURE_ENVELOPE: ${NEXT_PUBLIC_FEATURE_SECURE_ENVELOPE:-false}
+        NEXT_PUBLIC_FEATURE_WEBRTC_RELAY: ${NEXT_PUBLIC_FEATURE_WEBRTC_RELAY:-false}
+        NEXT_PUBLIC_FEATURE_LIVENESS: ${NEXT_PUBLIC_FEATURE_LIVENESS:-false}
+        NEXT_PUBLIC_LIVENESS_PROVIDER: ${NEXT_PUBLIC_LIVENESS_PROVIDER:-MANUAL}
     ports: ["3000:3000"]
     depends_on: [api]
 volumes:

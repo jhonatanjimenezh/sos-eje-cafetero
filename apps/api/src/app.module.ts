@@ -11,6 +11,7 @@ import { OfficialsModule } from './officials/officials.module';
 import { AffectedModule } from './affected/affected.module';
 import { AssistanceModule } from './assistance/assistance.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { SyncModule } from './sync/sync.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
     AffectedModule,
     AssistanceModule,
     AnalyticsModule,
+    SyncModule,
   ],
   controllers: [HealthController],
 })

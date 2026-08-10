@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {"dev":"next dev -p 3000","build":"next build","start":"next start -p 3000","lint":"tsc --noEmit"},
   "dependencies": {
+    "@sos/secure-envelope":"workspace:*",
     "@aws-amplify/ui-react":"^6.15.4",
     "@aws-amplify/ui-react-liveness":"^3.6.8",
     "aws-amplify":"^6.19.0",

@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
-import { countOutbox, IncidentPayload } from '../../lib/offline-db';
+import { countOutbox, countRelayQueue, IncidentPayload } from '../../lib/offline-db';
 import {
   submitIncidentOnlineOnly,
   submitIncidentResilient,
@@ -9,16 +9,16 @@ import {
 } from '../../lib/offline-sync';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
-const OFFLINE_QUEUE_ENABLED = process.env.NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE === 'true';
+const OFFLINE_QUEUE_REQUESTED = process.env.NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE === 'true';
+const SECURE_ENVELOPE_ENABLED = process.env.NEXT_PUBLIC_FEATURE_SECURE_ENVELOPE === 'true';
+const SECURE_OFFLINE_ENABLED = OFFLINE_QUEUE_REQUESTED && SECURE_ENVELOPE_ENABLED;
+const RELAY_ENABLED = process.env.NEXT_PUBLIC_FEATURE_WEBRTC_RELAY === 'true';
 
 type Location = { lat: number; lng: number };
-
-type SyncRegistration = ServiceWorkerRegistration & {
-  sync?: { register(tag: string): Promise<void> };
-};
+type SyncRegistration = ServiceWorkerRegistration & { sync?: { register(tag: string): Promise<void> } };
 
 async function requestBackgroundSync() {
-  if (!OFFLINE_QUEUE_ENABLED || !('serviceWorker' in navigator)) return;
+  if (!SECURE_OFFLINE_ENABLED || !('serviceWorker' in navigator)) return;
   try {
     const registration = (await navigator.serviceWorker.ready) as SyncRegistration;
     await registration.sync?.register('sos-outbox');
@@ -33,39 +33,38 @@ export default function Report() {
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [pending, setPending] = useState(0);
+  const [relayed, setRelayed] = useState(0);
   const [online, setOnline] = useState(true);
 
   const refreshPending = async () => {
-    if (!OFFLINE_QUEUE_ENABLED) {
+    if (!SECURE_OFFLINE_ENABLED) {
       setPending(0);
+      setRelayed(0);
       return;
     }
     try {
-      setPending(await countOutbox());
+      const [own, relay] = await Promise.all([countOutbox(), countRelayQueue()]);
+      setPending(own);
+      setRelayed(relay);
     } catch {
       setPending(0);
+      setRelayed(0);
     }
   };
 
   useEffect(() => {
     setOnline(navigator.onLine);
     void refreshPending();
-
-    const onOnline = () => {
-      setOnline(true);
-      void refreshPending();
-    };
+    const onOnline = () => { setOnline(true); void refreshPending(); };
     const onOffline = () => setOnline(false);
     const onOutboxChanged = () => void refreshPending();
-
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
-    if (OFFLINE_QUEUE_ENABLED) window.addEventListener('sos-outbox-changed', onOutboxChanged);
-
+    if (SECURE_OFFLINE_ENABLED) window.addEventListener('sos-outbox-changed', onOutboxChanged);
     return () => {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
-      if (OFFLINE_QUEUE_ENABLED) window.removeEventListener('sos-outbox-changed', onOutboxChanged);
+      if (SECURE_OFFLINE_ENABLED) window.removeEventListener('sos-outbox-changed', onOutboxChanged);
     };
   }, []);
 
@@ -78,10 +77,7 @@ export default function Report() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!loc) {
-      setMsg('Primero comparte tu ubicación.');
-      return;
-    }
+    if (!loc) { setMsg('Primero comparte tu ubicación.'); return; }
 
     setBusy(true);
     const form = event.currentTarget;
@@ -99,30 +95,24 @@ export default function Report() {
     };
 
     try {
-      const result = OFFLINE_QUEUE_ENABLED
+      const result = SECURE_OFFLINE_ENABLED
         ? await submitIncidentResilient(payload, API)
         : await submitIncidentOnlineOnly(payload, API);
 
       if (result.status === 'SENT') {
-        setMsg(
-          `✅ Reporte ${result.publicId ?? ''} registrado${result.potentialDuplicate ? ' · El sistema detectó otro reporte cercano y será revisado.' : ''}`,
-        );
-        form.reset();
-        setLoc(null);
+        setMsg(`✅ Reporte ${result.publicId ?? ''} registrado${'potentialDuplicate' in result && result.potentialDuplicate ? ' · El sistema detectó otro reporte cercano y será revisado.' : ''}`);
       } else {
-        setMsg(
-          '📴 No hay conexión estable. El reporte quedó almacenado localmente para sincronizarse al recuperar Internet.',
-        );
+        setMsg('🔐 Sin conexión estable. El reporte quedó cifrado y firmado localmente; GPS, teléfono y descripción no se guardaron en texto claro.');
         await requestBackgroundSync();
-        form.reset();
-        setLoc(null);
       }
+      form.reset();
+      setLoc(null);
       await refreshPending();
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'error desconocido';
       setMsg(
-        OFFLINE_QUEUE_ENABLED
-          ? `No se pudo guardar el reporte: ${detail}`
+        SECURE_OFFLINE_ENABLED
+          ? `⚠️ No se pudo guardar el reporte de forma criptográficamente segura: ${detail}`
           : `⚠️ ${detail} Mantén este formulario abierto y vuelve a pulsar Enviar cuando regrese la conexión.`,
       );
     } finally {
@@ -131,27 +121,20 @@ export default function Report() {
   }
 
   async function syncNow() {
-    if (!OFFLINE_QUEUE_ENABLED) return;
-    if (!navigator.onLine) {
-      setMsg('📴 Sigues sin conexión. Los reportes permanecerán guardados en este dispositivo.');
-      return;
-    }
+    if (!SECURE_OFFLINE_ENABLED) return;
+    if (!navigator.onLine) { setMsg('📴 Sigues sin conexión. Los envelopes cifrados permanecen en este dispositivo.'); return; }
     setSyncing(true);
     try {
       const summary = await syncPendingIncidents(API);
       await refreshPending();
       const delivered = summary.accepted + summary.alreadyProcessed;
-      if (delivered > 0) {
-        setMsg(`✅ Sincronización completada: ${delivered} reporte(s) entregados al centro de mando.`);
-      } else if (summary.retryableFailures > 0) {
-        setMsg('La red volvió, pero el servidor aún no respondió. Conservamos los reportes para reintentar.');
-      } else if (summary.permanentFailures > 0) {
-        setMsg('Hay reportes que requieren revisión antes de poder enviarse. Los conservamos localmente.');
-      } else {
-        setMsg('No hay reportes pendientes por sincronizar.');
-      }
+      if (delivered > 0) setMsg(`✅ Sincronización verificada: ${delivered} reporte(s) entregados al centro de mando.`);
+      else if (summary.rejected > 0) setMsg(`⚠️ ${summary.rejected} envelope(s) fueron rechazados por validaciones de seguridad o esquema.`);
+      else if (summary.retryableFailures > 0) setMsg('La red volvió, pero el servidor aún no respondió. Conservamos ciphertext para reintentar.');
+      else if (summary.permanentFailures > 0) setMsg('Hay mensajes con un error no reintentable. No se enviará plaintext como fallback.');
+      else setMsg('No hay reportes pendientes por sincronizar.');
     } catch {
-      setMsg('No se pudo sincronizar todavía. Los reportes siguen guardados localmente.');
+      setMsg('No se pudo sincronizar todavía. Los envelopes cifrados siguen guardados localmente.');
     } finally {
       setSyncing(false);
     }
@@ -159,37 +142,42 @@ export default function Report() {
 
   const connectionLabel = online
     ? '🟢 con conexión'
-    : OFFLINE_QUEUE_ENABLED
-      ? '🟡 sin conexión · cola offline habilitada'
+    : SECURE_OFFLINE_ENABLED
+      ? '🟡 sin conexión · cola cifrada habilitada'
       : '🟠 sin conexión · modo seguro sin persistencia sensible';
 
   return (
     <main className="wrap">
       <div className="card">
         <h1>🆘 Reportar emergencia</h1>
-        <p>Comparte primero tu ubicación GPS. No necesitas crear una cuenta.</p>
-
+        <p>Comparte primero tu ubicación GPS. No necesitas crear una cuenta para pedir rescate o reportar una emergencia.</p>
         <p className="muted">
           Estado: {connectionLabel}
-          {pending > 0 ? ` · ${pending} reporte(s) pendientes en este dispositivo` : ''}
+          {pending > 0 ? ` · ${pending} reporte(s) propios cifrados` : ''}
+          {relayed > 0 ? ` · ${relayed} mensaje(s) cifrados transportados para otros` : ''}
         </p>
 
-        {!OFFLINE_QUEUE_ENABLED && !online && (
+        {!SECURE_OFFLINE_ENABLED && !online && (
           <p className="alert">
-            Por seguridad, esta versión no guarda GPS, teléfono ni descripción en el dispositivo cuando no hay Internet.
-            El formulario permanecerá aquí para que puedas reintentar cuando vuelva la conexión.
+            Por seguridad, esta versión no persistirá GPS, teléfono ni descripción mientras no exista el canal cifrado completo.
+            El formulario puede reintentarse al volver la red.
           </p>
         )}
-
-        {OFFLINE_QUEUE_ENABLED && pending > 0 && (
-          <button className="btn" type="button" disabled={syncing || !online} onClick={syncNow}>
-            {syncing ? 'Sincronizando…' : '↻ Sincronizar ahora'}
-          </button>
+        {OFFLINE_QUEUE_REQUESTED && !SECURE_ENVELOPE_ENABLED && (
+          <p className="alert">La cola offline fue solicitada pero SecureEnvelope está deshabilitado. Se aplica fail-closed: no habrá persistencia sensible en plaintext.</p>
+        )}
+        {SECURE_OFFLINE_ENABLED && (
+          <p className="muted">🔐 Si la red falla, el navegador guarda únicamente un envelope AES-256-GCM firmado; el servidor es el destinatario del contenido.</p>
         )}
 
-        <button className="btn danger" type="button" onClick={gps}>
-          {loc ? '✓ Ubicación capturada' : '📍 Compartir mi ubicación'}
-        </button>
+        {SECURE_OFFLINE_ENABLED && (pending > 0 || relayed > 0) && (
+          <button className="btn" type="button" disabled={syncing || !online} onClick={syncNow}>
+            {syncing ? 'Sincronizando…' : '↻ Sincronizar envelopes ahora'}
+          </button>
+        )}
+        {RELAY_ENABLED && SECURE_OFFLINE_ENABLED && <p><a href="/relay/">↔ Transportar mensajes cifrados entre dispositivos cercanos</a></p>}
+
+        <button className="btn danger" type="button" onClick={gps}>{loc ? '✓ Ubicación capturada' : '📍 Compartir mi ubicación'}</button>
         {loc && <p className="muted">GPS recibido con precisión del dispositivo.</p>}
 
         <form onSubmit={submit}>
@@ -212,42 +200,23 @@ export default function Report() {
           <label>Prioridad percibida</label>
           <select name="priority" defaultValue="MEDIUM">
             <option value="CRITICAL">Crítica: vidas en riesgo inmediato</option>
-            <option value="HIGH">Alta</option>
-            <option value="MEDIUM">Media</option>
-            <option value="LOW">Baja</option>
+            <option value="HIGH">Alta</option><option value="MEDIUM">Media</option><option value="LOW">Baja</option>
           </select>
 
           <label>Dirección / referencia</label>
           <input name="address" placeholder="Barrio, calle, edificio o referencia" />
-
           <label>Descripción</label>
           <textarea name="description" rows={4} placeholder="¿Qué está ocurriendo?" />
-
           <div className="grid">
-            <div>
-              <label>Personas afectadas</label>
-              <input name="peopleAffected" type="number" min="0" defaultValue="0" />
-            </div>
-            <div>
-              <label>Personas atrapadas</label>
-              <input name="peopleTrapped" type="number" min="0" defaultValue="0" />
-            </div>
+            <div><label>Personas afectadas</label><input name="peopleAffected" type="number" min="0" defaultValue="0" /></div>
+            <div><label>Personas atrapadas</label><input name="peopleTrapped" type="number" min="0" defaultValue="0" /></div>
           </div>
-
           <label>Teléfono de contacto</label>
           <input name="contactPhone" inputMode="tel" />
-
           <button disabled={busy} className="btn danger" type="submit">
-            {busy
-              ? 'Enviando…'
-              : online
-                ? 'Enviar reporte'
-                : OFFLINE_QUEUE_ENABLED
-                  ? 'Guardar reporte offline'
-                  : 'Reintentar envío'}
+            {busy ? 'Protegiendo y enviando…' : online ? 'Enviar reporte' : SECURE_OFFLINE_ENABLED ? 'Cifrar y guardar reporte offline' : 'Reintentar envío'}
           </button>
         </form>
-
         {msg && <p className="alert">{msg}</p>}
       </div>
     </main>
