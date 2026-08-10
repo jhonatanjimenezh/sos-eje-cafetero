@@ -1,10 +1,11 @@
 import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CreateReunificationRequestDto, ReunificationTargetActionDto } from './dto';
+import { ReunificationOriginGuard } from './reunification-origin.guard';
 import { ReunificationService } from './reunification.service';
 
 @Controller('reunification')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ReunificationOriginGuard)
 export class ReunificationController {
   constructor(private readonly service: ReunificationService) {}
 
