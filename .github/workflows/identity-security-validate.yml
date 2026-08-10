@@ -55,17 +55,22 @@ jobs:
         env:
           DATABASE_URL: postgresql://sos:test-only-password@localhost:5432/sos
         run: node apps/api/test/verified-assistance-db.mjs
+      - name: Reunification database privacy invariants
+        env:
+          DATABASE_URL: postgresql://sos:test-only-password@localhost:5432/sos
+        run: node apps/api/test/reunification-db.mjs
       - name: Typecheck API
         run: pnpm --filter @sos/api lint
       - name: Build API
         run: pnpm --filter @sos/api build
-      - name: Identity security invariants
-        run: node --test apps/api/test/identity-security.test.cjs
+      - name: Identity and reunification security invariants
+        run: node --test apps/api/test/identity-security.test.cjs apps/api/test/reunification-security.test.cjs
       - name: Typecheck web
         env:
           NEXT_PUBLIC_FEATURE_LIVENESS: 'false'
           NEXT_PUBLIC_LIVENESS_PROVIDER: MANUAL
           NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE: 'false'
+          NEXT_PUBLIC_FEATURE_REUNIFICATION: 'true'
         run: pnpm --filter @sos/web lint
       - name: Build web
         env:
@@ -73,6 +78,7 @@ jobs:
           NEXT_PUBLIC_FEATURE_LIVENESS: 'false'
           NEXT_PUBLIC_LIVENESS_PROVIDER: MANUAL
           NEXT_PUBLIC_FEATURE_OFFLINE_QUEUE: 'false'
+          NEXT_PUBLIC_FEATURE_REUNIFICATION: 'true'
         run: pnpm --filter @sos/web build
 
   scanner:
