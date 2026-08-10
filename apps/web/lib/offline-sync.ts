@@ -61,6 +61,10 @@ function receiptForEnvelope(receipts: SyncReceiptV1[], envelope: SecureEnvelopeV
   );
 }
 
+function isNonTerminalRelayRejection(receipt: SyncReceiptV1): boolean {
+  return receipt.status === 'REJECTED' && receipt.emitterAuthenticated === false;
+}
+
 async function readError(response: Response): Promise<string> {
   try {
     const body = await response.json();
@@ -171,7 +175,20 @@ export async function submitIncidentResilient(
       const receipt = receiptForEnvelope(result.receipts, envelope);
       if (!receipt) throw new Error('El servidor no devolvió un recibo ligado criptográficamente a este reporte.');
       await verifyServerReceipt(receipt, envelope, apiBase);
-      if (receipt.status === 'REJECTED') throw new Error(`Reporte rechazado de forma segura: ${receipt.reasonCode ?? 'UNKNOWN'}`);
+
+      if (isNonTerminalRelayRejection(receipt)) {
+        // Una copia alterada pudo haber llegado al servidor por un relay. El receipt
+        // firmado solo confirma el diagnóstico; NO confirma la autenticidad del emisor
+        // y por tanto jamás autoriza a borrar el original válido.
+        await savePendingEnvelope(envelope);
+        notifyOutboxChanged();
+        return { status: 'QUEUED', messageId: envelope.messageId };
+      }
+
+      if (receipt.status === 'REJECTED') {
+        throw new Error(`Reporte rechazado después de autenticar al emisor: ${receipt.reasonCode ?? 'UNKNOWN'}`);
+      }
+
       await saveReceipt(receipt);
       notifyOutboxChanged();
       return { status: 'SENT', publicId: receipt.publicEntityId };
@@ -198,7 +215,10 @@ export async function syncPendingIncidents(apiBase = DEFAULT_API, limit = 50): P
   const config = await getServerCryptoConfig(apiBase);
   const own = await listPendingEnvelopes(limit);
   const relay = await listRelayEnvelopes(Math.max(0, limit - own.length));
-  const all = [...own.map((item) => ({ envelope: item.envelope, own: true })), ...relay.map((item) => ({ envelope: item.envelope, own: false }))];
+  const all = [
+    ...own.map((item) => ({ envelope: item.envelope, own: true })),
+    ...relay.map((item) => ({ envelope: item.envelope, own: false })),
+  ];
   const batchSize = Math.max(1, Math.min(config.maxBatchSize, 4));
 
   for (let offset = 0; offset < all.length; offset += batchSize) {
@@ -229,6 +249,19 @@ export async function syncPendingIncidents(apiBase = DEFAULT_API, limit = 50): P
         summary.retryableFailures += 1;
         continue;
       }
+
+      if (isNonTerminalRelayRejection(receipt)) {
+        if (item.own) {
+          await markEnvelopeAttempt(
+            item.envelope.messageId,
+            `UNAUTHENTICATED_REJECTION:${receipt.reasonCode ?? 'UNKNOWN'}`,
+          );
+        }
+        // Own y relay conservan ciphertext. Otro camino puede entregar el original.
+        summary.retryableFailures += 1;
+        continue;
+      }
+
       await saveReceipt(receipt);
       if (receipt.status === 'ACCEPTED') summary.accepted += 1;
       else if (receipt.status === 'ALREADY_PROCESSED') summary.alreadyProcessed += 1;
