@@ -6,9 +6,9 @@ resource "aws_iam_role" "cognito_sms" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "cognito-idp.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
       Condition = {
         StringEquals = {
           "sts:ExternalId"    = random_uuid.cognito_sms_external_id.result
