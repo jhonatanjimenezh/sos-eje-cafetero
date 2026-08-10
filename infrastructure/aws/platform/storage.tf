@@ -106,9 +106,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
 }
 
 resource "aws_sqs_queue" "jobs_dlq" {
-  name                       = "${local.name}-jobs-dlq"
-  message_retention_seconds  = 1209600
-  sqs_managed_sse_enabled    = true
+  name                      = "${local.name}-jobs-dlq"
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
 }
 
 resource "aws_sqs_queue" "jobs" {
