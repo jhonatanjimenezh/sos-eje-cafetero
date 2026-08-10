@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS reunification_requests (
   expires_at timestamptz NOT NULL,
   withdrawn_at timestamptz,
   CONSTRAINT reunification_requests_status_chk CHECK (
-    status IN ('ACTIVE','WITHDRAWN','EXPIRED','BLOCKED_BY_TARGET','ABUSE_REVIEW','SELF_SUPPRESSED')
+    -- Solo hechos que el seeker puede conocer por sí mismo. Acciones privadas del target
+    -- jamás cambian este status para evitar un side-channel por re-submission.
+    status IN ('ACTIVE','WITHDRAWN','EXPIRED','SELF_SUPPRESSED')
   ),
   CONSTRAINT reunification_requests_name_len_chk CHECK (seeker_display_name IS NULL OR char_length(seeker_display_name) <= 80),
   CONSTRAINT reunification_requests_relationship_len_chk CHECK (declared_relationship IS NULL OR char_length(declared_relationship) <= 40),
@@ -40,6 +42,9 @@ CREATE TABLE IF NOT EXISTS reunification_target_actions (
 );
 CREATE INDEX IF NOT EXISTS reunification_target_actions_target_idx
   ON reunification_target_actions(target_auth_subject, created_at DESC);
+CREATE INDEX IF NOT EXISTS reunification_target_actions_abuse_idx
+  ON reunification_target_actions(action, created_at DESC)
+  WHERE action='REPORT_ABUSE';
 
 CREATE TABLE IF NOT EXISTS reunification_blocks (
   target_auth_subject text NOT NULL REFERENCES auth_identities(subject) ON DELETE CASCADE,
