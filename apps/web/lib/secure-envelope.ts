@@ -280,7 +280,13 @@ export async function verifyServerReceipt(
   if (receipt.version !== 1 || receipt.receiptSignatureSuite !== RECEIPT_SIGNATURE_SUITE) {
     throw new Error('RECEIPT_SUITE_INVALID');
   }
-  if (expected && (receipt.messageId !== expected.messageId || receipt.ciphertextSha256 !== expected.ciphertextSha256)) {
+  if (
+    expected && (
+      receipt.emitterKeyId !== expected.emitterKeyId ||
+      receipt.messageId !== expected.messageId ||
+      receipt.ciphertextSha256 !== expected.ciphertextSha256
+    )
+  ) {
     throw new Error('RECEIPT_BINDING_MISMATCH');
   }
   const config = await getServerCryptoConfig(apiBase);
