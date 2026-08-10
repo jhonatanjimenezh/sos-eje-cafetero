@@ -8,9 +8,14 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
 const migration = read('apps/api/migrations/007_safe_pets.sql');
 const service = read('apps/api/src/pets/pets.service.ts');
+const contactService = read('apps/api/src/pets/pets-contact.service.ts');
 const controller = read('apps/api/src/pets/pets.controller.ts');
 const dto = read('apps/api/src/pets/dto.ts');
 const originGuard = read('apps/api/src/pets/pets-origin.guard.ts');
+const legacyReports = read('apps/api/src/reports/reports.controller.ts');
+const petPage = read('apps/web/app/mascotas/page.tsx');
+const notifier = read('apps/web/app/components/PetSafetyNotifier.tsx');
+const serviceWorker = read('apps/web/public/sw.js');
 
 test('public pet projection contains only id kind name status timestamp', () => {
   const view = migration.slice(migration.indexOf('CREATE OR REPLACE VIEW public_pet_cases'));
@@ -37,17 +42,19 @@ test('owner personal proof uses OTP identity plus encrypted payload and keyed id
 
 test('proof of life requires short-lived server challenge and video', () => {
   assert.match(service, /now\(\)\+interval '10 minutes'/);
-  assert.match(service, /PET-[^`]*randomBytes/);
+  assert.match(service, /randomBytes\(3\).*toString\('hex'\)/);
   assert.match(service, /La prueba de vida debe ser video/);
   assert.match(service, /challenge_id/);
   assert.match(migration, /kind <> 'PROOF_OF_LIFE' OR challenge_id IS NOT NULL/);
+  assert.match(petPage, /prueba de vida fuerte|prueba de vida|no es una prueba matemática/i);
 });
 
 test('private evidence is short-lived access controlled and encrypted at rest', () => {
   assert.match(service, /ServerSideEncryption: 'aws:kms'/);
   assert.match(service, /NODE_ENV === 'production' && !key/);
   assert.match(service, /expiresIn: 120/);
-  assert.match(service, /OWNER_VIEWED_PROOF_OF_LIFE|PET_OWNER_VIEWED_PROOF_OF_LIFE/);
+  assert.match(service, /PET_OWNER_VIEWED_PROOF_OF_LIFE/);
+  assert.match(service, /PET_FINDER_VIEWED_OWNERSHIP_EVIDENCE/);
   assert.match(service, /EVIDENCE_MALWARE_SCAN_MODE/);
   assert.match(service, /THREATS_FOUND/);
   assert.match(service, /ChecksumSHA256/);
@@ -65,20 +72,23 @@ test('reject block abuse actions do not mutate pet claim lifecycle', () => {
   assert.match(service, /pet_blocks/);
 });
 
-test('contact becomes available only after explicit accepted action and consent', () => {
+test('contact becomes available only after evidence, explicit accepted action and consent', () => {
   assert.match(service, /action='OWNER_AUTHORIZE_CONTACT'/);
   assert.match(service, /status: 'NOT_AVAILABLE'/);
   assert.match(service, /status: 'CONTACT_AVAILABLE'/);
   assert.match(service, /share_creator_phone/);
   assert.match(service, /share_claimant_phone/);
+  assert.match(contactService, /status !== 'EVIDENCE_READY' \|\| !claim\.share_claimant_phone/);
+  assert.match(contactService, /kind='PROOF_OF_LIFE' AND upload_status='READY'/);
   assert.doesNotMatch(controller, /@Get\(['"][^'"]*(?:phone|owner\?)/i);
 });
 
-test('public free text cannot smuggle contact details', () => {
+test('public free text cannot smuggle direct contact details', () => {
   assert.match(service, /Los campos públicos no permiten teléfonos, correos, enlaces ni usuarios externos/);
   assert.match(service, /wa\\\.me|wa\.me/);
   assert.match(service, /telegram\|whatsapp/);
-  assert.match(service, /(?:\+\?\\d|\\d\[\\d\\s)/);
+  assert.match(service, /\[a-z0-9\._%\+-\]\+@/);
+  assert.match(service, /\\d\\s\(\)\.\-/);
 });
 
 test('sensitive pet mutations use authenticated citizen session and exact-origin guard', () => {
@@ -88,10 +98,34 @@ test('sensitive pet mutations use authenticated citizen session and exact-origin
   assert.match(originGuard, /\^Bearer\\s\+\\S\+\$/);
 });
 
-test('legacy flat animal_reports is not reused as pet security identity domain', () => {
+test('legacy flat animal report endpoint cannot bypass the safe flow when enabled', () => {
   assert.equal(service.includes('animal_reports'), false);
   assert.equal(service.includes('reporter_phone'), false);
-  assert.equal(controller.includes('reports/animals'), false);
+  assert.match(legacyReports, /FEATURE_PET_SAFETY === 'true'/);
+  assert.match(legacyReports, /GoneException/);
+  assert.match(legacyReports, /migró al flujo seguro \/api\/v1\/pets/);
+});
+
+test('pet private page is network-only and never enters persistent service-worker shell', () => {
+  const shellLine = serviceWorker.split('\n').find(line => line.includes('CORE_SHELL')) || '';
+  const navLine = serviceWorker.split('\n').find(line => line.includes('PUBLIC_NAVIGATION_PATHS =')) || '';
+  assert.equal(shellLine.includes('/mascotas'), false, '/mascotas must not be in CORE_SHELL');
+  assert.equal(navLine.includes('/mascotas'), false, '/mascotas must not be cacheable navigation');
+  assert.match(serviceWorker, /if \(!PUBLIC_NAVIGATION_PATHS\.has\(url\.pathname\)\) return/);
+});
+
+test('global pet notification is neutral and contains no identity, pet name or phone', () => {
+  assert.match(notifier, /nuevas pruebas privadas relacionadas con mascotas/i);
+  for (const forbidden of ['petName', 'claimedPetName', 'phone_e164', 'contactPhone', 'finderName', 'ownerName']) {
+    assert.equal(notifier.includes(forbidden), false, `global notifier must not include ${forbidden}`);
+  }
+});
+
+test('public catalog UI renders photo plus name without coordinates or contact', () => {
+  const publicSection = petPage.slice(petPage.indexOf('cases.map'), petPage.indexOf('{selectedCase &&'));
+  assert.match(publicSection, /petCase\.photoUrl/);
+  assert.match(publicSection, /petCase\.name/);
+  assert.doesNotMatch(publicSection, /lat|lng|phone|address|breed|color|city|areaHint/);
 });
 
 test('feature can fail closed independently from human SOS', () => {
