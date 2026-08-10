@@ -81,12 +81,28 @@ try {
 
   await db.query(`
     INSERT INTO reunification_target_actions(request_id,target_auth_subject,action)
-    VALUES($1,$2,'REVEAL_CONTACT')
+    VALUES($1,$2,'REVEAL_CONTACT'),($1,$2,'REPORT_ABUSE')
   `, [inserted.rows[0].id, authB]);
   await db.query(`
     INSERT INTO reunification_blocks(target_auth_subject,seeker_auth_subject)
     VALUES($1,$2)
   `, [authB, authA]);
+
+  // Una acción privada del target no puede modificar el lifecycle observable por seeker.
+  const lifecycle = await db.query(
+    'SELECT status,public_id FROM reunification_requests WHERE id=$1',
+    [inserted.rows[0].id],
+  );
+  if (lifecycle.rows[0].status !== 'ACTIVE') throw new Error('target-private action changed seeker-visible lifecycle');
+  if (lifecycle.rows[0].public_id !== inserted.rows[0].public_id) throw new Error('target-private action changed request public id');
+
+  let privateStatusRejected = false;
+  try {
+    await db.query("UPDATE reunification_requests SET status='ABUSE_REVIEW' WHERE id=$1", [inserted.rows[0].id]);
+  } catch (error) {
+    privateStatusRejected = error?.code === '23514';
+  }
+  if (!privateStatusRejected) throw new Error('request status constraint allows target-private state');
 
   const leaked = await db.query(`
     SELECT row_to_json(r)::text AS row_text
@@ -96,7 +112,7 @@ try {
   if (serialized.includes('+573000000002')) throw new Error('target phone leaked into reunification request row');
 
   await db.query('DELETE FROM auth_identities WHERE subject IN ($1,$2)', [authA, authB]);
-  console.log('reunification DB invariants passed: blind token, no target phone, uniqueness, actions and block');
+  console.log('reunification DB invariants passed: blind token, no target phone, stable lifecycle, actions and block');
 } finally {
   await db.end();
 }
