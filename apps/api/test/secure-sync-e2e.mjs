@@ -97,13 +97,19 @@ async function post(envelopes) {
   return response.json();
 }
 
-async function verifyReceipt(cfg, receipt, envelope) {
+async function verifyReceipt(cfg, receipt, envelope, expectedEmitterAuthenticated) {
   if (
     receipt.emitterKeyId !== envelope.emitterKeyId ||
     receipt.messageId !== envelope.messageId ||
     receipt.ciphertextSha256 !== envelope.ciphertextSha256
   ) {
     throw new Error('receipt is not bound to emitter+message+digest');
+  }
+  if (typeof receipt.emitterAuthenticated !== 'boolean') {
+    throw new Error('receipt is missing emitterAuthenticated boolean');
+  }
+  if (receipt.emitterAuthenticated !== expectedEmitterAuthenticated) {
+    throw new Error(`receipt emitterAuthenticated=${receipt.emitterAuthenticated}, expected ${expectedEmitterAuthenticated}`);
   }
   const key = await crypto.subtle.importKey(
     'spki', fromB64url(cfg.receiptSigningPublicKeySpki), { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['verify'],
@@ -156,12 +162,12 @@ try {
   const accepted = await post([valid]);
   const acceptedReceipt = accepted.receipts[0];
   if (acceptedReceipt.status !== 'ACCEPTED') throw new Error(`expected ACCEPTED, got ${acceptedReceipt.status}`);
-  await verifyReceipt(cfg, acceptedReceipt, valid);
+  await verifyReceipt(cfg, acceptedReceipt, valid, true);
 
   for (let i = 0; i < 9; i += 1) {
     const replay = await post([valid]);
     if (replay.receipts[0].status !== 'ALREADY_PROCESSED') throw new Error(`replay ${i} was not idempotent`);
-    await verifyReceipt(cfg, replay.receipts[0], valid);
+    await verifyReceipt(cfg, replay.receipts[0], valid, true);
   }
   const count = await incidentCount(db, valid);
   if (count !== 1) throw new Error(`10 deliveries created ${count} incidents`);
@@ -173,7 +179,7 @@ try {
   if (replacementResult.receipts[0].status !== 'REJECTED' || replacementResult.receipts[0].reasonCode !== 'MESSAGE_ID_DIGEST_CONFLICT') {
     throw new Error(`same-emitter replacement attack not rejected: ${JSON.stringify(replacementResult.receipts[0])}`);
   }
-  await verifyReceipt(cfg, replacementResult.receipts[0], replacement);
+  await verifyReceipt(cfg, replacementResult.receipts[0], replacement, true);
   if (await incidentCount(db, valid) !== 1) throw new Error('same-emitter replacement changed domain cardinality');
 
   // Un relay hostil puede observar el UUID y firmar otro envelope con SU propia key.
@@ -182,27 +188,28 @@ try {
   const hostileSameUuid = await makeEnvelope(cfg, hostileEmitter, 'hostile-same-uuid', { messageId: valid.messageId });
   const hostileResult = await post([hostileSameUuid]);
   if (hostileResult.receipts[0].status !== 'ACCEPTED') throw new Error('different emitter namespace was incorrectly conflated');
-  await verifyReceipt(cfg, hostileResult.receipts[0], hostileSameUuid);
+  await verifyReceipt(cfg, hostileResult.receipts[0], hostileSameUuid, true);
   if (await incidentCount(db, valid) !== 1 || await incidentCount(db, hostileSameUuid) !== 1) {
     throw new Error('emitter namespaces are not isolated at domain idempotency layer');
   }
 
   // Poisoning pre-auth: el relay manda primero una copia con ciphertext corrupto.
-  // Ese rechazo NO puede reservar permanentemente emitter+messageId.
+  // Ese rechazo NO puede reservar permanentemente emitter+messageId ni convencer al
+  // origen de purgar el original; emitterAuthenticated=false queda firmado por server.
   const poisonBase = await makeEnvelope(cfg, emitter, 'preauth-poison');
   const poisonedCiphertext = { ...poisonBase, ciphertext: mutateBase64url(poisonBase.ciphertext) };
   const poisonedResult = await post([poisonedCiphertext]);
   if (poisonedResult.receipts[0].status !== 'REJECTED' || poisonedResult.receipts[0].reasonCode !== 'CIPHERTEXT_DIGEST_MISMATCH') {
     throw new Error(`pre-auth poisoned copy not rejected: ${JSON.stringify(poisonedResult.receipts[0])}`);
   }
-  await verifyReceipt(cfg, poisonedResult.receipts[0], poisonedCiphertext);
+  await verifyReceipt(cfg, poisonedResult.receipts[0], poisonedCiphertext, false);
   await assertNoIncident(db, poisonedCiphertext);
   await assertNoDurableNamespace(db, poisonedCiphertext);
   const recoveredOriginal = await post([poisonBase]);
   if (recoveredOriginal.receipts[0].status !== 'ACCEPTED') {
     throw new Error(`hostile relay poisoned legitimate namespace: ${JSON.stringify(recoveredOriginal.receipts[0])}`);
   }
-  await verifyReceipt(cfg, recoveredOriginal.receipts[0], poisonBase);
+  await verifyReceipt(cfg, recoveredOriginal.receipts[0], poisonBase, true);
   if (await incidentCount(db, poisonBase) !== 1) throw new Error('legitimate original did not recover after pre-auth tampering');
 
   const digestTamperBase = await makeEnvelope(cfg, emitter, 'digest-tamper');
@@ -211,7 +218,7 @@ try {
   if (digestResult.receipts[0].status !== 'REJECTED' || digestResult.receipts[0].reasonCode !== 'CIPHERTEXT_DIGEST_MISMATCH') {
     throw new Error(`ciphertext tampering not rejected correctly: ${JSON.stringify(digestResult.receipts[0])}`);
   }
-  await verifyReceipt(cfg, digestResult.receipts[0], digestTampered);
+  await verifyReceipt(cfg, digestResult.receipts[0], digestTampered, false);
   await assertNoDurableNamespace(db, digestTampered);
 
   const signatureBase = await makeEnvelope(cfg, emitter, 'signature-tamper');
@@ -220,11 +227,12 @@ try {
   if (signatureResult.receipts[0].status !== 'REJECTED' || signatureResult.receipts[0].reasonCode !== 'SIGNATURE_INVALID') {
     throw new Error(`signature tampering not rejected correctly: ${JSON.stringify(signatureResult.receipts[0])}`);
   }
+  await verifyReceipt(cfg, signatureResult.receipts[0], signatureTampered, false);
   await assertNoDurableNamespace(db, signatureTampered);
 
   const signatureRecovered = await post([signatureBase]);
   if (signatureRecovered.receipts[0].status !== 'ACCEPTED') throw new Error('signature-tampered relay copy poisoned original');
-  await verifyReceipt(cfg, signatureRecovered.receipts[0], signatureBase);
+  await verifyReceipt(cfg, signatureRecovered.receipts[0], signatureBase, true);
 
   const mixedValid = await makeEnvelope(cfg, emitter, 'mixed-valid');
   const headerBase = await makeEnvelope(cfg, emitter, 'header-tamper');
@@ -236,12 +244,12 @@ try {
   if (mixedRejected?.status !== 'REJECTED' || mixedRejected.reasonCode !== 'SIGNATURE_INVALID') {
     throw new Error(`tampered envelope in mixed batch not isolated: ${JSON.stringify(mixedRejected)}`);
   }
-  await verifyReceipt(cfg, mixedAccepted, mixedValid);
-  await verifyReceipt(cfg, mixedRejected, headerTampered);
+  await verifyReceipt(cfg, mixedAccepted, mixedValid, true);
+  await verifyReceipt(cfg, mixedRejected, headerTampered, false);
   await assertNoDurableNamespace(db, headerTampered);
 
-  // Simula teléfono perdido/robado: una key revocada puede producir criptografía válida,
-  // pero el servidor debe negar nuevos envelopes de esa procedencia.
+  // Simula teléfono perdido/robado: la firma ECDSA sí autentica al emisor antes de que
+  // la política de revocación rechace, por eso emitterAuthenticated debe ser true.
   const revokedEmitter = await makeEmitter();
   await db.query(`INSERT INTO secure_device_keys(emitter_key_id,public_key_spki_sha256,revoked_at,revocation_reason)
     VALUES($1,$1,now(),'synthetic lost device test')`, [revokedEmitter.keyId]);
@@ -250,13 +258,13 @@ try {
   if (revokedResult.receipts[0].status !== 'REJECTED' || revokedResult.receipts[0].reasonCode !== 'EMITTER_KEY_REVOKED') {
     throw new Error(`revoked emitter was not rejected: ${JSON.stringify(revokedResult.receipts[0])}`);
   }
-  await verifyReceipt(cfg, revokedResult.receipts[0], revokedEnvelope);
+  await verifyReceipt(cfg, revokedResult.receipts[0], revokedEnvelope, true);
 
   for (const rejected of [digestTampered, headerTampered, revokedEnvelope]) {
     await assertNoIncident(db, rejected);
   }
 
-  console.log('secure sync E2E passed: encryption, emitter namespaces, replay, pre-auth poisoning resistance, replacement conflict, tampering, revocation, mixed batch, signed receipts');
+  console.log('secure sync E2E passed: encryption, emitter namespaces, replay, signed emitter-auth state, pre-auth poisoning resistance, replacement conflict, tampering, revocation, mixed batch, signed receipts');
 } finally {
   await db.end();
 }
