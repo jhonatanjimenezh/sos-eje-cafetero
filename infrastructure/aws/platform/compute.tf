@@ -1,11 +1,15 @@
 resource "aws_cloudwatch_log_group" "api" {
   name              = "/ecs/${local.name}/api"
   retention_in_days = 30
-  kms_key_id        = aws_kms_key.data.arn
 }
 
 resource "random_password" "identity_hash" {
   length  = 64
+  special = false
+}
+
+resource "random_password" "origin_verify" {
+  length  = 48
   special = false
 }
 
@@ -57,8 +61,29 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "Forbidden"
+      status_code  = "403"
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "cloudfront_only" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 100
+
+  action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.api.arn
+  }
+
+  condition {
+    http_header {
+      http_header_name = "X-SOS-Origin-Verify"
+      values           = [random_password.origin_verify.result]
+    }
   }
 }
 
@@ -263,7 +288,7 @@ resource "aws_ecs_service" "api" {
     rollback = true
   }
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener_rule.cloudfront_only]
 }
 
 resource "aws_appautoscaling_target" "api" {
