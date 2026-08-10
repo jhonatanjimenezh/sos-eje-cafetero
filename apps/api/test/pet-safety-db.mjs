@@ -1,0 +1,121 @@
+import pg from 'pg';
+
+const { Client } = pg;
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) throw new Error('DATABASE_URL required');
+
+const db = new Client({ connectionString: DATABASE_URL });
+await db.connect();
+
+try {
+  await db.query('BEGIN');
+
+  const tables = await db.query(`
+    SELECT table_name,column_name
+    FROM information_schema.columns
+    WHERE table_schema='public'
+      AND table_name IN (
+        'pet_profiles','pet_cases','pet_case_media','pet_claims','pet_claim_challenges',
+        'pet_claim_evidence','pet_claim_actions','pet_blocks'
+      )
+    ORDER BY table_name,column_name
+  `);
+  const byTable = new Map();
+  for (const row of tables.rows) {
+    if (!byTable.has(row.table_name)) byTable.set(row.table_name, new Set());
+    byTable.get(row.table_name).add(row.column_name);
+  }
+  for (const required of [
+    'pet_profiles','pet_cases','pet_case_media','pet_claims','pet_claim_challenges',
+    'pet_claim_evidence','pet_claim_actions','pet_blocks',
+  ]) {
+    if (!byTable.has(required)) throw new Error(`missing table ${required}`);
+  }
+
+  const profileColumns = byTable.get('pet_profiles');
+  for (const required of ['private_payload_ciphertext','private_payload_iv','private_payload_tag','owner_document_hash','microchip_hash']) {
+    if (!profileColumns.has(required)) throw new Error(`missing pet_profiles.${required}`);
+  }
+  for (const forbidden of ['owner_phone','phone_e164','owner_address','owner_document_number','private_distinguishing_marks']) {
+    if (profileColumns.has(forbidden)) throw new Error(`plaintext pet owner field forbidden: ${forbidden}`);
+  }
+
+  for (const table of ['pet_cases','pet_claims','pet_claim_evidence']) {
+    const columns = byTable.get(table);
+    for (const forbidden of ['phone','phone_e164','owner_phone','finder_phone']) {
+      if (columns.has(forbidden)) throw new Error(`${table}.${forbidden} must not exist`);
+    }
+  }
+
+  const viewColumns = await db.query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='public_pet_cases'
+    ORDER BY ordinal_position
+  `);
+  const actualPublic = viewColumns.rows.map(row => row.column_name);
+  const expectedPublic = ['public_id','kind','public_name','status','created_at'];
+  if (JSON.stringify(actualPublic) !== JSON.stringify(expectedPublic)) {
+    throw new Error(`public_pet_cases exposes unexpected columns: ${actualPublic.join(',')}`);
+  }
+
+  const owner = `pet-owner-${crypto.randomUUID()}`;
+  const finder = `pet-finder-${crypto.randomUUID()}`;
+  await db.query(`INSERT INTO auth_identities(subject,phone_e164) VALUES($1,$2),($3,$4)`, [
+    owner, '+573001110001', finder, '+573001110002',
+  ]);
+
+  const profile = await db.query(`INSERT INTO pet_profiles(
+    owner_auth_subject,pet_name,animal_type,sex,microchip_hash,microchip_last4,
+    private_payload_ciphertext,private_payload_iv,private_payload_tag,consent_version)
+    VALUES($1,'Synthetic Pet','DOG','UNKNOWN','synthetic-hmac','0001',$2,$3,$4,'test-v1')
+    RETURNING id`, [owner, Buffer.from('ciphertext'), crypto.getRandomValues(new Uint8Array(12)), crypto.getRandomValues(new Uint8Array(16))]);
+
+  let lostWithoutProfileRejected = false;
+  try {
+    await db.query(`INSERT INTO pet_cases(created_by_subject,kind,animal_type,public_name)
+      VALUES($1,'LOST','DOG','Synthetic')`, [owner]);
+  } catch (error) {
+    lostWithoutProfileRejected = error?.code === '23514';
+  }
+  if (!lostWithoutProfileRejected) throw new Error('LOST case without private pet profile was not rejected');
+
+  const lost = await db.query(`INSERT INTO pet_cases(pet_profile_id,created_by_subject,kind,animal_type,public_name,exact_location)
+    VALUES($1,$2,'LOST','DOG','Synthetic Pet',ST_SetSRID(ST_MakePoint(-75.52,5.06),4326)::geography)
+    RETURNING id,public_id`, [profile.rows[0].id, owner]);
+
+  const found = await db.query(`INSERT INTO pet_cases(created_by_subject,kind,animal_type,public_name,exact_location)
+    VALUES($1,'FOUND','DOG','Sin identificar',ST_SetSRID(ST_MakePoint(-75.51,5.07),4326)::geography)
+    RETURNING id`, [finder]);
+  if (!found.rowCount) throw new Error('FOUND case without prior LOST/profile should be allowed');
+
+  const claim = await db.query(`INSERT INTO pet_claims(case_id,claimant_subject,claimant_role,status)
+    VALUES($1,$2,'FINDER','EVIDENCE_READY') RETURNING id,public_id,status`, [lost.rows[0].id, finder]);
+  await db.query(`INSERT INTO pet_claim_actions(claim_id,actor_subject,action)
+    VALUES($1,$2,'OWNER_REJECT')`, [claim.rows[0].id, owner]);
+
+  const afterAction = await db.query('SELECT public_id,status FROM pet_claims WHERE id=$1', [claim.rows[0].id]);
+  if (afterAction.rows[0].status !== 'EVIDENCE_READY') throw new Error('private owner action changed claimant-visible lifecycle');
+  if (afterAction.rows[0].public_id !== claim.rows[0].public_id) throw new Error('private owner action changed claim public id');
+
+  let privateStatusRejected = false;
+  try {
+    await db.query("UPDATE pet_claims SET status='BLOCKED_BY_OWNER' WHERE id=$1", [claim.rows[0].id]);
+  } catch (error) {
+    privateStatusRejected = error?.code === '23514';
+  }
+  if (!privateStatusRejected) throw new Error('pet_claims allows private target-action status');
+
+  const publicRow = await db.query('SELECT row_to_json(v)::text row_text FROM public_pet_cases v WHERE public_id=$1', [lost.rows[0].public_id]);
+  const serialized = String(publicRow.rows[0].row_text);
+  for (const forbidden of ['+573001110001', '-75.52', '5.06', 'synthetic-hmac']) {
+    if (serialized.includes(forbidden)) throw new Error(`public projection leaked sensitive value: ${forbidden}`);
+  }
+
+  await db.query('ROLLBACK');
+  console.log('pet safety DB invariants passed: private owner data, minimal public view, FOUND without prior report, stable claim lifecycle');
+} catch (error) {
+  try { await db.query('ROLLBACK'); } catch {}
+  throw error;
+} finally {
+  await db.end();
+}
