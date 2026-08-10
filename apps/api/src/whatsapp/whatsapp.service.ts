@@ -1,0 +1,12 @@
+import { Injectable } from '@nestjs/common';
+import Redis from 'ioredis';
+import { IncidentsService } from '../incidents/incidents.service';
+import { IncidentPriority, IncidentType } from '../incidents/dto';
+@Injectable()
+export class WhatsAppService {
+  private redis = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379');
+  constructor(private readonly incidents:IncidentsService) {}
+  async sendText(to:string, body:string){ if(!process.env.WHATSAPP_ACCESS_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) return; await fetch(`https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,{method:'POST',headers:{Authorization:`Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to,type:'text',text:{body}})}); }
+  async handle(value:any){ const messages=value?.messages ?? []; for(const m of messages){ const from=m.from; const key=`wa:${from}`; const state=JSON.parse((await this.redis.get(key)) ?? '{}'); if(m.type==='location'){ state.lat=m.location.latitude; state.lng=m.location.longitude; state.step='AWAIT_TYPE'; await this.redis.set(key,JSON.stringify(state),'EX',3600); await this.sendText(from,'¿Qué ocurre? Responde: 1 personas atrapadas, 2 heridos, 3 vivienda/edificio dañado, 4 necesidad médica, 5 agua/alimentos, 6 otra emergencia.'); continue; } const text=(m.text?.body ?? '').trim().toLowerCase(); if(!state.step || text==='ayuda' || text==='sos'){ await this.redis.set(key,JSON.stringify({step:'AWAIT_LOCATION'}),'EX',3600); await this.sendText(from,'🆘 SOS Eje Cafetero. Envíame tu UBICACIÓN desde WhatsApp para registrar la emergencia. Si existe peligro inmediato, usa también el canal oficial de emergencias de tu municipio.'); continue; } if(state.step==='AWAIT_TYPE' && ['1','2','3','4','5','6'].includes(text)){ const map:any={'1':[IncidentType.PEOPLE_TRAPPED,IncidentPriority.CRITICAL],'2':[IncidentType.INJURED_PERSON,IncidentPriority.CRITICAL],'3':[IncidentType.BUILDING_DAMAGE,IncidentPriority.HIGH],'4':[IncidentType.MEDICAL_NEED,IncidentPriority.HIGH],'5':[IncidentType.WATER_NEED,IncidentPriority.MEDIUM],'6':[IncidentType.OTHER,IncidentPriority.MEDIUM]}; const [type,priority]=map[text]; const created=await this.incidents.create({type,priority,lat:state.lat,lng:state.lng,contactPhone:from} as any,'WHATSAPP',m.id); await this.redis.del(key); await this.sendText(from,`✅ Reporte ${created.public_id} registrado. Conserva este código. La plataforma no reemplaza los canales oficiales de emergencia.`); } }
+  }
+}
