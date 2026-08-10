@@ -14,6 +14,12 @@ export type ResilientSubmitResult =
   | { status: 'SENT'; publicId?: string; potentialDuplicate?: unknown }
   | { status: 'QUEUED'; messageId: string };
 
+export type OnlineSubmitResult = {
+  status: 'SENT';
+  publicId?: string;
+  potentialDuplicate?: unknown;
+};
+
 export type SyncSummary = {
   accepted: number;
   alreadyProcessed: number;
@@ -89,6 +95,39 @@ function buildPending(payload: IncidentPayload): PendingIncident {
     attempts: 0,
     payload,
   };
+}
+
+/**
+ * Safe-mode submit used when persistent offline storage is disabled.
+ * Nothing is written to IndexedDB. Two network attempts reuse the exact same
+ * Idempotency-Key so a lost response after a successful server commit does not
+ * create a duplicate during the automatic retry.
+ */
+export async function submitIncidentOnlineOnly(
+  payload: IncidentPayload,
+  apiBase = DEFAULT_API,
+): Promise<OnlineSubmitResult> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    throw new Error('Sin conexión. El modo seguro actual no almacena ubicación ni contacto offline.');
+  }
+
+  const idempotencyKey = `web:${newId()}`;
+  let lastRetryableError = 'No fue posible contactar el servidor.';
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await postIncident(payload, idempotencyKey, apiBase);
+    if (result.kind === 'success') {
+      return {
+        status: 'SENT',
+        publicId: result.body?.public_id,
+        potentialDuplicate: result.body?.potentialDuplicate,
+      };
+    }
+    if (result.kind === 'permanent') throw new Error(result.error);
+    lastRetryableError = result.error;
+  }
+
+  throw new Error(`${lastRetryableError} No se guardó información sensible en este dispositivo.`);
 }
 
 export async function submitIncidentResilient(
