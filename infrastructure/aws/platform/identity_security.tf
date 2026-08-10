@@ -103,9 +103,9 @@ resource "aws_iam_role_policy" "guardduty_malware" {
         Resource = "${aws_s3_bucket.evidence.arn}/private/affected/*"
       },
       {
-        Sid    = "DecryptEvidence"
-        Effect = "Allow"
-        Action = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Sid      = "DecryptEvidence"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
         Resource = aws_kms_key.data.arn
         Condition = {
           StringLike = {
