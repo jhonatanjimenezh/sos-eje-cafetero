@@ -9,10 +9,12 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const migration = read('apps/api/migrations/006_safe_reunification.sql');
 const service = read('apps/api/src/reunification/reunification.service.ts');
 const controller = read('apps/api/src/reunification/reunification.controller.ts');
+const reunificationDto = read('apps/api/src/reunification/dto.ts');
 const authService = read('apps/api/src/auth/auth.service.ts');
 const authDto = read('apps/api/src/auth/dto.ts');
 const otpUi = read('apps/web/app/components/OtpLogin.tsx');
 const notifier = read('apps/web/app/components/ReunificationNotifier.tsx');
+const serviceWorker = read('apps/web/public/sw.js');
 
 test('target phone is represented by keyed lookup token, never a plaintext column', () => {
   assert.match(migration, /target_lookup_token text NOT NULL/);
@@ -38,6 +40,13 @@ test('target contact is explicit reveal, not included in inbox listing', () => {
   assert.equal(inboxMap.includes('phone_e164'), false, 'inbox list must not contain seeker phone before explicit reveal');
 });
 
+test('free text cannot bypass verified contact reveal', () => {
+  assert.match(reunificationDto, /NO_DIRECT_CONTACT/);
+  assert.match(reunificationDto, /wa\\\.me|wa\\\.me/);
+  assert.match(reunificationDto, /phone_e164 OTP-verificado/);
+  assert.match(reunificationDto, /@Matches\(NO_DIRECT_CONTACT/);
+});
+
 test('block and abuse decisions are one-way and never notify seeker', () => {
   assert.match(migration, /reunification_blocks/);
   assert.match(service, /REUNIFICATION_SEEKER_BLOCKED/);
@@ -60,4 +69,16 @@ test('global notice is neutral and contains no seeker identity', () => {
   assert.match(notifier, /mensajes privados de reencuentro/i);
   assert.equal(notifier.includes('seekerDisplayName'), false);
   assert.equal(notifier.includes('contactPhone'), false);
+});
+
+test('private reunification navigation is network-only and old broad cache is purged', () => {
+  assert.match(serviceWorker, /CACHE_VERSION = 'sos-shell-v3'/);
+  assert.match(serviceWorker, /PUBLIC_NAVIGATION_PATHS/);
+  assert.match(serviceWorker, /if \(!PUBLIC_NAVIGATION_PATHS\.has\(url\.pathname\)\) return/);
+  const shellLine = serviceWorker.split('\n').find(line => line.includes('CORE_SHELL')) || '';
+  const navLine = serviceWorker.split('\n').find(line => line.includes('PUBLIC_NAVIGATION_PATHS =')) || '';
+  for (const privatePath of ['/reencuentro', '/damnificados', '/command-center']) {
+    assert.equal(shellLine.includes(privatePath), false, `${privatePath} must not be in CORE_SHELL`);
+    assert.equal(navLine.includes(privatePath), false, `${privatePath} must not be cacheable navigation`);
+  }
 });
