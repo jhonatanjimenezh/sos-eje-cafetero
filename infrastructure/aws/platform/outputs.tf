@@ -66,3 +66,15 @@ output "jobs_queue_url" {
 output "alarms_topic_arn" {
   value = aws_sns_topic.alarms.arn
 }
+
+output "feature_liveness" {
+  value = var.feature_liveness
+}
+
+output "liveness_provider" {
+  value = upper(var.liveness_provider)
+}
+
+output "guardduty_malware_protection_enabled" {
+  value = var.enable_guardduty_malware_protection
+}
