@@ -224,22 +224,12 @@ variable "sync_max_batch_size" {
   }
 }
 
-variable "sync_emitter_batches_per_minute" {
-  description = "Límite suplementario por emitterKeyId; evita penalizar carrier NAT compartido."
+variable "sync_batch_requests_per_minute" {
+  description = "Límite suplementario por emitterKeyId, no por IP, para no penalizar carrier NAT compartido."
   type        = number
   default     = 60
   validation {
-    condition     = var.sync_emitter_batches_per_minute >= 10 && var.sync_emitter_batches_per_minute <= 600
-    error_message = "sync_emitter_batches_per_minute debe estar entre 10 y 600."
-  }
-}
-
-variable "sync_global_batches_per_minute" {
-  description = "Safety valve por instancia; WAF sigue siendo la barrera perimetral en AWS."
-  type        = number
-  default     = 1200
-  validation {
-    condition     = var.sync_global_batches_per_minute >= 100 && var.sync_global_batches_per_minute <= 10000
-    error_message = "sync_global_batches_per_minute debe estar entre 100 y 10000."
+    condition     = var.sync_batch_requests_per_minute >= 10 && var.sync_batch_requests_per_minute <= 600
+    error_message = "sync_batch_requests_per_minute debe estar entre 10 y 600."
   }
 }
