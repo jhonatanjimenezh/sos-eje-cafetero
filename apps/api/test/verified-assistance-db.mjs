@@ -22,6 +22,7 @@ try {
   const match = await client.query(`INSERT INTO assistance_matches(need_id,offer_id,score,distance_meters)
     VALUES($1,$2,100,0) RETURNING id`, [need.rows[0].id, offer.rows[0].id]);
 
+  await client.query('SAVEPOINT approval_check');
   let blocked = false;
   try {
     await client.query(`UPDATE assistance_matches SET status='APPROVED' WHERE id=$1`, [match.rows[0].id]);
@@ -31,6 +32,7 @@ try {
     await client.query('ROLLBACK TO SAVEPOINT approval_check');
   }
   if (!blocked) throw new Error('database allowed APPROVED assistance for non-VERIFIED beneficiary');
+  await client.query('RELEASE SAVEPOINT approval_check');
 
   await client.query(`UPDATE affected_profiles SET verification_status='VERIFIED' WHERE id=$1`, [profile.rows[0].id]);
   const approved = await client.query(`UPDATE assistance_matches SET status='APPROVED' WHERE id=$1 RETURNING id`, [match.rows[0].id]);
