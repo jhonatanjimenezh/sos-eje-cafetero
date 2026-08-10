@@ -1,4 +1,4 @@
-import { IsEnum, IsString, Length } from 'class-validator';
+import { IsEnum, IsString, IsUUID, Length } from 'class-validator';
 
 export enum AuthAudience { CITIZEN='CITIZEN', OFFICIAL='OFFICIAL' }
 export enum OtpFlow { SIGNUP_CONFIRM='SIGNUP_CONFIRM', AUTH_CHALLENGE='AUTH_CHALLENGE' }
@@ -9,9 +9,6 @@ export class RequestOtpDto {
 }
 
 export class VerifyOtpDto {
-  @IsString() phone!: string;
-  @IsEnum(AuthAudience) audience!: AuthAudience;
-  @IsEnum(OtpFlow) flow!: OtpFlow;
+  @IsUUID() challengeId!: string;
   @IsString() @Length(4, 10) code!: string;
-  @IsString() session?: string;
 }
