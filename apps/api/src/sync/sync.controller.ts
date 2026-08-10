@@ -12,7 +12,9 @@ export class SyncController {
   private enforceRateLimit(dto: SecureEnvelopeBatchDto) {
     const minute = Math.floor(Date.now() / 60000);
     const globalMax = Number(process.env.SYNC_GLOBAL_BATCHES_PER_MINUTE ?? 1200);
-    const emitterMax = Number(process.env.SYNC_EMITTER_BATCHES_PER_MINUTE ?? 60);
+    const emitterMax = Number(
+      process.env.SYNC_EMITTER_BATCHES_PER_MINUTE ?? process.env.SYNC_BATCH_REQUESTS_PER_MINUTE ?? 60,
+    );
 
     if (this.globalRate.minute !== minute) this.globalRate = { minute, count: 0 };
     this.globalRate.count += 1;
