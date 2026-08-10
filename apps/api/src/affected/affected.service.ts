@@ -8,7 +8,11 @@ import { CompleteEvidenceDto, PresignEvidenceDto, UpsertAffectedProfileDto, Veri
 
 @Injectable()
 export class AffectedService {
-  private readonly s3 = new S3Client({ region: process.env.AWS_REGION ?? 'us-east-1' });
+  private readonly s3 = new S3Client({
+    region: process.env.AWS_REGION ?? 'us-east-1',
+    endpoint: process.env.S3_ENDPOINT || undefined,
+    forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
+  });
   constructor(@Inject(PG_POOL) private readonly db: Pool) {}
 
   private documentHash(type: string, number: string) {

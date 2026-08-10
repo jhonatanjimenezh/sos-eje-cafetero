@@ -1,0 +1,6 @@
+bucket       = "REPLACE_BOOTSTRAP_STATE_BUCKET"
+key          = "sos-eje-cafetero/prod/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+kms_key_id   = "REPLACE_BOOTSTRAP_KMS_KEY_ARN"
+use_lockfile = true
