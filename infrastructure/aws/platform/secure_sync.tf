@@ -1,9 +1,9 @@
 resource "aws_kms_key" "sync_encryption" {
-  description             = "${local.name} SecureEnvelope RSA-3072 encryption key"
-  key_spec                = "RSA_3072"
-  key_usage               = "ENCRYPT_DECRYPT"
-  deletion_window_in_days = 30
-  enable_key_rotation     = false
+  description              = "${local.name} SecureEnvelope RSA-3072 encryption key"
+  customer_master_key_spec = "RSA_3072"
+  key_usage                = "ENCRYPT_DECRYPT"
+  deletion_window_in_days  = 30
+  enable_key_rotation      = false
 }
 
 resource "aws_kms_alias" "sync_encryption" {
@@ -12,11 +12,11 @@ resource "aws_kms_alias" "sync_encryption" {
 }
 
 resource "aws_kms_key" "sync_receipt_signing" {
-  description             = "${local.name} SecureEnvelope RSA-3072 receipt signing key"
-  key_spec                = "RSA_3072"
-  key_usage               = "SIGN_VERIFY"
-  deletion_window_in_days = 30
-  enable_key_rotation     = false
+  description              = "${local.name} SecureEnvelope RSA-3072 receipt signing key"
+  customer_master_key_spec = "RSA_3072"
+  key_usage                = "SIGN_VERIFY"
+  deletion_window_in_days  = 30
+  enable_key_rotation      = false
 }
 
 resource "aws_kms_alias" "sync_receipt_signing" {
