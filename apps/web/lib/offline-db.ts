@@ -28,6 +28,8 @@ export type PendingEnvelope = {
 };
 
 export type RelayEnvelope = {
+  relayKey: string;
+  emitterKeyId: string;
   messageId: string;
   ciphertextSha256: string;
   createdAt: string;
@@ -37,11 +39,15 @@ export type RelayEnvelope = {
 };
 
 export type SeenMessage = {
+  relayKey: string;
+  emitterKeyId: string;
   messageId: string;
   ciphertextSha256: string;
   firstSeenAt: string;
   lastSeenAt: string;
 };
+
+export type StoredReceipt = SyncReceiptV1 & { relayKey: string };
 
 export type DeviceKeyRecord = {
   id: 'device-signing-v1';
@@ -58,7 +64,7 @@ export type CachedSyncConfig = {
 };
 
 const DB_NAME = 'sos-eje-cafetero';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const OUTBOX = 'outbox';
 const RELAY_QUEUE = 'relay_queue';
 const SEEN_MESSAGES = 'seen_messages';
@@ -67,6 +73,10 @@ const DEVICE_KEYS = 'device_keys';
 const SYNC_CONFIG = 'sync_config';
 const MAX_OUTBOX_MESSAGES = 200;
 const MAX_RELAY_MESSAGES = 500;
+
+export function relayIdentity(emitterKeyId: string, messageId: string): string {
+  return `${emitterKeyId}:${messageId}`;
+}
 
 function requireIndexedDb() {
   if (typeof indexedDB === 'undefined') throw new Error('IndexedDB no está disponible en este dispositivo.');
@@ -86,18 +96,27 @@ export function openOfflineDb(): Promise<IDBDatabase> {
       // esa cola legacy y solo se permite persistir ciphertext a partir de v2.
       if (oldVersion < 2 && db.objectStoreNames.contains(OUTBOX)) db.deleteObjectStore(OUTBOX);
 
+      // V3 endurece el namespace relay para que un peer no pueda ocupar el UUID de otro
+      // emisor. Esta rama aún no se ha habilitado para datos reales; descartamos stores
+      // relay/receipt pre-productivos en lugar de conservar un keyPath ambiguo.
+      if (oldVersion < 3) {
+        for (const store of [RELAY_QUEUE, SEEN_MESSAGES, RECEIPTS]) {
+          if (db.objectStoreNames.contains(store)) db.deleteObjectStore(store);
+        }
+      }
+
       if (!db.objectStoreNames.contains(OUTBOX)) {
         const store = db.createObjectStore(OUTBOX, { keyPath: 'messageId' });
         store.createIndex('status_createdAt', ['status', 'createdAt'], { unique: false });
         store.createIndex('expiresAt', 'expiresAt', { unique: false });
       }
       if (!db.objectStoreNames.contains(RELAY_QUEUE)) {
-        const store = db.createObjectStore(RELAY_QUEUE, { keyPath: 'messageId' });
+        const store = db.createObjectStore(RELAY_QUEUE, { keyPath: 'relayKey' });
         store.createIndex('expiresAt', 'expiresAt', { unique: false });
         store.createIndex('receivedAt', 'receivedAt', { unique: false });
       }
-      if (!db.objectStoreNames.contains(SEEN_MESSAGES)) db.createObjectStore(SEEN_MESSAGES, { keyPath: 'messageId' });
-      if (!db.objectStoreNames.contains(RECEIPTS)) db.createObjectStore(RECEIPTS, { keyPath: 'messageId' });
+      if (!db.objectStoreNames.contains(SEEN_MESSAGES)) db.createObjectStore(SEEN_MESSAGES, { keyPath: 'relayKey' });
+      if (!db.objectStoreNames.contains(RECEIPTS)) db.createObjectStore(RECEIPTS, { keyPath: 'relayKey' });
       if (!db.objectStoreNames.contains(DEVICE_KEYS)) db.createObjectStore(DEVICE_KEYS, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(SYNC_CONFIG)) db.createObjectStore(SYNC_CONFIG, { keyPath: 'id' });
     };
@@ -145,14 +164,6 @@ async function putRecord<T>(storeName: string, value: T): Promise<void> {
   });
 }
 
-async function deleteRecord(storeName: string, key: IDBValidKey): Promise<void> {
-  await withStore<void>(storeName, 'readwrite', (store, resolve, reject) => {
-    const request = store.delete(key);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
-}
-
 function assertEnvelopeShape(envelope: SecureEnvelopeV1) {
   const forbidden = ['lat', 'lng', 'address', 'description', 'contactPhone', 'phone', 'document', 'fullName'];
   const serializedHeaders = JSON.stringify({
@@ -188,7 +199,7 @@ export async function savePendingEnvelope(envelope: SecureEnvelopeV1): Promise<v
     lastError: existing?.lastError,
     envelope,
   });
-  await rememberSeen(envelope.messageId, envelope.ciphertextSha256, now);
+  await rememberSeen(envelope.emitterKeyId, envelope.messageId, envelope.ciphertextSha256, now);
 }
 
 export async function getPendingEnvelope(messageId: string): Promise<PendingEnvelope | undefined> {
@@ -227,7 +238,8 @@ export async function listRelayEnvelopes(limit = 50): Promise<RelayEnvelope[]> {
 
 export async function saveRelayEnvelope(envelope: SecureEnvelopeV1): Promise<'SAVED' | 'ALREADY_SEEN'> {
   assertEnvelopeShape(envelope);
-  const seen = await getSeenMessage(envelope.messageId);
+  const relayKey = relayIdentity(envelope.emitterKeyId, envelope.messageId);
+  const seen = await getSeenMessage(envelope.emitterKeyId, envelope.messageId);
   if (seen) {
     if (seen.ciphertextSha256 !== envelope.ciphertextSha256) throw new Error('MESSAGE_ID_DIGEST_CONFLICT');
     return 'ALREADY_SEEN';
@@ -235,6 +247,8 @@ export async function saveRelayEnvelope(envelope: SecureEnvelopeV1): Promise<'SA
   if ((await countStore(RELAY_QUEUE)) >= MAX_RELAY_MESSAGES) throw new Error('RELAY_QUEUE_FULL');
   const now = new Date().toISOString();
   await putRecord<RelayEnvelope>(RELAY_QUEUE, {
+    relayKey,
+    emitterKeyId: envelope.emitterKeyId,
     messageId: envelope.messageId,
     ciphertextSha256: envelope.ciphertextSha256,
     createdAt: envelope.createdAt,
@@ -242,7 +256,7 @@ export async function saveRelayEnvelope(envelope: SecureEnvelopeV1): Promise<'SA
     receivedAt: now,
     envelope,
   });
-  await rememberSeen(envelope.messageId, envelope.ciphertextSha256, now);
+  await rememberSeen(envelope.emitterKeyId, envelope.messageId, envelope.ciphertextSha256, now);
   return 'SAVED';
 }
 
@@ -277,14 +291,22 @@ export async function markEnvelopeFailed(messageId: string, error: string): Prom
   });
 }
 
-export async function getSeenMessage(messageId: string): Promise<SeenMessage | undefined> {
-  return getRecord<SeenMessage>(SEEN_MESSAGES, messageId);
+export async function getSeenMessage(emitterKeyId: string, messageId: string): Promise<SeenMessage | undefined> {
+  return getRecord<SeenMessage>(SEEN_MESSAGES, relayIdentity(emitterKeyId, messageId));
 }
 
-export async function rememberSeen(messageId: string, ciphertextSha256: string, at = new Date().toISOString()): Promise<void> {
-  const existing = await getSeenMessage(messageId);
+export async function rememberSeen(
+  emitterKeyId: string,
+  messageId: string,
+  ciphertextSha256: string,
+  at = new Date().toISOString(),
+): Promise<void> {
+  const relayKey = relayIdentity(emitterKeyId, messageId);
+  const existing = await getSeenMessage(emitterKeyId, messageId);
   if (existing && existing.ciphertextSha256 !== ciphertextSha256) throw new Error('MESSAGE_ID_DIGEST_CONFLICT');
   await putRecord<SeenMessage>(SEEN_MESSAGES, {
+    relayKey,
+    emitterKeyId,
     messageId,
     ciphertextSha256,
     firstSeenAt: existing?.firstSeenAt ?? at,
@@ -293,20 +315,33 @@ export async function rememberSeen(messageId: string, ciphertextSha256: string, 
 }
 
 export async function saveReceipt(receipt: SyncReceiptV1): Promise<void> {
+  const relayKey = relayIdentity(receipt.emitterKeyId, receipt.messageId);
+  const stored: StoredReceipt = { ...receipt, relayKey };
   const db = await openOfflineDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction([OUTBOX, RELAY_QUEUE, RECEIPTS], 'readwrite');
-    tx.objectStore(RECEIPTS).put(receipt);
-    tx.objectStore(OUTBOX).delete(receipt.messageId);
-    tx.objectStore(RELAY_QUEUE).delete(receipt.messageId);
+    tx.objectStore(RECEIPTS).put(stored);
+    tx.objectStore(RELAY_QUEUE).delete(relayKey);
+
+    const ownRequest = tx.objectStore(OUTBOX).get(receipt.messageId);
+    ownRequest.onsuccess = () => {
+      const own = ownRequest.result as PendingEnvelope | undefined;
+      if (
+        own?.envelope.emitterKeyId === receipt.emitterKeyId &&
+        own.ciphertextSha256 === receipt.ciphertextSha256
+      ) {
+        tx.objectStore(OUTBOX).delete(receipt.messageId);
+      }
+    };
+
     tx.oncomplete = () => { db.close(); resolve(); };
     tx.onerror = () => { const error = tx.error ?? new Error('No se pudo guardar el recibo.'); db.close(); reject(error); };
     tx.onabort = tx.onerror;
   });
 }
 
-export async function getReceipt(messageId: string): Promise<SyncReceiptV1 | undefined> {
-  return getRecord<SyncReceiptV1>(RECEIPTS, messageId);
+export async function getReceipt(emitterKeyId: string, messageId: string): Promise<SyncReceiptV1 | undefined> {
+  return getRecord<StoredReceipt>(RECEIPTS, relayIdentity(emitterKeyId, messageId));
 }
 
 export async function listReceipts(limit = 500): Promise<SyncReceiptV1[]> {
@@ -317,7 +352,7 @@ export async function listReceipts(limit = 500): Promise<SyncReceiptV1[]> {
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor || result.length >= limit) return resolve(result);
-      result.push(cursor.value as SyncReceiptV1);
+      result.push(cursor.value as StoredReceipt);
       cursor.continue();
     };
   });
@@ -365,18 +400,24 @@ export async function pruneExpiredOfflineState(now = new Date()): Promise<void> 
   }
 }
 
-export async function getEnvelopeForRelay(messageId: string): Promise<SecureEnvelopeV1 | undefined> {
+export async function getEnvelopeForRelay(emitterKeyId: string, messageId: string): Promise<SecureEnvelopeV1 | undefined> {
   const own = await getPendingEnvelope(messageId);
-  if (own) return own.envelope;
-  const relay = await getRecord<RelayEnvelope>(RELAY_QUEUE, messageId);
+  if (own?.envelope.emitterKeyId === emitterKeyId) return own.envelope;
+  const relay = await getRecord<RelayEnvelope>(RELAY_QUEUE, relayIdentity(emitterKeyId, messageId));
   return relay?.envelope;
 }
 
-export async function listMessageInventory(limit = 500): Promise<Array<{ messageId: string; ciphertextSha256: string }>> {
+export async function listMessageInventory(
+  limit = 500,
+): Promise<Array<{ emitterKeyId: string; messageId: string; ciphertextSha256: string }>> {
   const own = await listPendingEnvelopes(limit);
   const remaining = Math.max(0, limit - own.length);
   const relay = await listRelayEnvelopes(remaining);
-  return [...own, ...relay].map((item) => ({ messageId: item.messageId, ciphertextSha256: item.ciphertextSha256 }));
+  return [...own, ...relay].map((item) => ({
+    emitterKeyId: item.envelope.emitterKeyId,
+    messageId: item.messageId,
+    ciphertextSha256: item.ciphertextSha256,
+  }));
 }
 
 export async function requestPersistentStorage(): Promise<boolean | undefined> {
