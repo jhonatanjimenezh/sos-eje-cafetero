@@ -18,10 +18,9 @@ set -a
 . ./.env
 set +a
 
-read -r answer <<EOF || true
-EOF
+MC_IMAGE=${MINIO_MC_IMAGE:-minio/mc:RELEASE.2025-07-21T05-28-08Z}
 printf '%s' "Esto reemplazará el contenido de la base ${POSTGRES_DB:-sos}. Escriba RESTORE para continuar: "
-read answer
+read -r answer
 [ "$answer" = "RESTORE" ] || { echo "Cancelado"; exit 1; }
 
 echo "[1/2] Restaurando PostgreSQL"
@@ -32,7 +31,7 @@ if [ -d "$BACKUP/minio" ]; then
   echo "[2/2] Restaurando MinIO"
   docker run --rm --network sos-eje-cafetero_backend \
     -e MC_HOST_local="http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000" \
-    -v "$BACKUP/minio:/backup:ro" minio/mc:latest \
+    -v "$BACKUP/minio:/backup:ro" "$MC_IMAGE" \
     mirror --overwrite /backup "local/${PRIVATE_EVIDENCE_BUCKET:-sos-private-evidence}"
 else
   echo "[2/2] No hay snapshot MinIO en el backup; se omite"

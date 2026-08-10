@@ -28,7 +28,7 @@ jobs:
         with:
           terraform_version: '1.15.8'
       - name: Terraform format
-        run: terraform fmt -check -recursive infrastructure/aws
+        run: terraform fmt -check -diff -recursive infrastructure/aws
       - name: Validate bootstrap
         working-directory: infrastructure/aws/bootstrap
         run: |
@@ -49,7 +49,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate root Compose
-        run: docker compose --env-file .env.example config >/dev/null
+        run: |
+          cp .env.example .env
+          docker compose --env-file .env config >/dev/null
       - name: Validate on-prem Compose
         working-directory: infrastructure/onprem
         run: |

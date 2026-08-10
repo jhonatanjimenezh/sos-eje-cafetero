@@ -108,7 +108,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
 resource "aws_sqs_queue" "jobs_dlq" {
   name                      = "${local.name}-jobs-dlq"
   message_retention_seconds = 1209600
-  kms_master_key_id         = aws_kms_key.data.arn
+  sqs_managed_sse_enabled   = true
 }
 
 resource "aws_sqs_queue" "jobs" {
@@ -116,7 +116,7 @@ resource "aws_sqs_queue" "jobs" {
   visibility_timeout_seconds = 60
   message_retention_seconds  = 345600
   receive_wait_time_seconds  = 10
-  kms_master_key_id          = aws_kms_key.data.arn
+  sqs_managed_sse_enabled    = true
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.jobs_dlq.arn

@@ -31,7 +31,7 @@ services:
     networks: [backend]
 
   minio:
-    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    image: ${MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-09-06T17-38-46Z}
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -40,14 +40,14 @@ services:
     volumes:
       - miniodata:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "mc", "ready", "local"]
       interval: 10s
       timeout: 5s
       retries: 30
     networks: [backend]
 
   minio-init:
-    image: minio/mc:RELEASE.2025-07-21T05-28-08Z
+    image: ${MINIO_MC_IMAGE:-minio/mc:RELEASE.2025-07-21T05-28-08Z}
     depends_on:
       minio:
         condition: service_healthy

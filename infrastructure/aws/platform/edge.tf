@@ -91,12 +91,16 @@ resource "aws_wafv2_web_acl" "edge" {
   name     = "${local.name}-edge"
   scope    = "CLOUDFRONT"
 
-  default_action { allow {} }
+  default_action {
+    allow {}
+  }
 
   rule {
     name     = "AWSManagedRulesCommonRuleSet"
     priority = 10
-    override_action { none {} }
+    override_action {
+      none {}
+    }
     statement {
       managed_rule_group_statement {
         name        = "AWSManagedRulesCommonRuleSet"
@@ -113,7 +117,9 @@ resource "aws_wafv2_web_acl" "edge" {
   rule {
     name     = "AWSManagedRulesKnownBadInputsRuleSet"
     priority = 20
-    override_action { none {} }
+    override_action {
+      none {}
+    }
     statement {
       managed_rule_group_statement {
         name        = "AWSManagedRulesKnownBadInputsRuleSet"
@@ -130,7 +136,9 @@ resource "aws_wafv2_web_acl" "edge" {
   rule {
     name     = "RateLimitPerIP"
     priority = 30
-    action { block {} }
+    action {
+      block {}
+    }
     statement {
       rate_based_statement {
         aggregate_key_type = "IP"
@@ -200,6 +208,11 @@ resource "aws_cloudfront_distribution" "app" {
   origin {
     domain_name = aws_lb.api.dns_name
     origin_id   = "api-alb"
+
+    custom_header {
+      name  = "X-SOS-Origin-Verify"
+      value = random_password.origin_verify.result
+    }
 
     custom_origin_config {
       http_port              = 80
