@@ -153,28 +153,28 @@ resource "aws_iam_role_policy" "ecs_task" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = ["s3:ListBucket"]
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
         Resource = [aws_s3_bucket.evidence.arn]
       },
       {
-        Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject"]
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject"]
         Resource = ["${aws_s3_bucket.evidence.arn}/private/*"]
       },
       {
-        Effect = "Allow"
-        Action = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"]
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"]
         Resource = [aws_kms_key.data.arn]
       },
       {
-        Effect = "Allow"
-        Action = ["cognito-idp:AdminGetUser"]
+        Effect   = "Allow"
+        Action   = ["cognito-idp:AdminGetUser"]
         Resource = [aws_cognito_user_pool.main.arn]
       },
       {
-        Effect = "Allow"
-        Action = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
         Resource = [aws_sqs_queue.jobs.arn]
       }
     ]
