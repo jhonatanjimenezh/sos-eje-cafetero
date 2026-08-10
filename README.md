@@ -4,6 +4,16 @@ Centro unificado open source para respuesta a emergencias y coordinación humani
 
 > **Regla de seguridad:** pedir rescate nunca exige cuenta, documento ni biometría. El flujo reforzado de identidad se usa para el registro formal de damnificado y distribución de ayudas.
 
+## 🚦 Estado de salida a producción
+
+El proyecto usa **producción progresiva por capacidades**, no un único “todo o nada”.
+
+- [`Production Gates`](docs/operations/PRODUCTION_GATES.md): criterios `INTERNAL`, `LIMITED_PRODUCTION` y `FULL_EMERGENCY_PRODUCTION`.
+- [Issue #12 — Production Readiness Gate](../../issues/12): checklist GO/NO-GO del piloto institucional.
+- [`Parallel Delivery Policy`](docs/contributing/PARALLEL_DELIVERY_POLICY.md): cómo seguir desarrollando en paralelo sin desestabilizar `main`.
+
+Una feature incompleta puede permanecer apagada mediante feature flag; ninguna capacidad que exponga PII, rompa idempotencia o carezca de rollback debe habilitarse por urgencia.
+
 ## 🚨 Quiero ayudar a desarrollar ahora
 
 No necesitas reconstruir todo el contexto del proyecto.
@@ -109,6 +119,8 @@ Antes de producción real también deben completarse: salida del SMS sandbox, do
 
 ## Documentación principal
 
+- [`Production Gates`](docs/operations/PRODUCTION_GATES.md)
+- [`Parallel Delivery Policy`](docs/contributing/PARALLEL_DELIVERY_POLICY.md)
 - [`Architecture Hub`](docs/architecture/README.md)
 - [`System Overview`](docs/architecture/SYSTEM_OVERVIEW.md)
 - [`Secure Offline Relay`](docs/architecture/SECURE_OFFLINE_RELAY.md)
