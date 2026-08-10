@@ -22,6 +22,11 @@ const DEFAULT_API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/ap
 const encoder = new TextEncoder();
 const MAX_CLIENT_TTL_SECONDS = 72 * 60 * 60;
 
+function toArrayBuffer(bytes: ArrayBuffer | Uint8Array): ArrayBuffer {
+  if (bytes instanceof ArrayBuffer) return bytes;
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
 function bytesToBase64Url(bytes: ArrayBuffer | Uint8Array): string {
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let binary = '';
@@ -29,24 +34,23 @@ function bytesToBase64Url(bytes: ArrayBuffer | Uint8Array): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-function base64UrlToBytes(value: string): Uint8Array {
+function base64UrlToBuffer(value: string): ArrayBuffer {
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
   const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
   const binary = atob(padded);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+  return bytes.buffer;
 }
 
 async function sha256Base64Url(input: ArrayBuffer | Uint8Array): Promise<string> {
-  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
-  return bytesToBase64Url(await crypto.subtle.digest('SHA-256', bytes));
+  return bytesToBase64Url(await crypto.subtle.digest('SHA-256', toArrayBuffer(input)));
 }
 
 async function importRsaOaepPublicKey(spki: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     'spki',
-    base64UrlToBytes(spki),
+    base64UrlToBuffer(spki),
     { name: 'RSA-OAEP', hash: 'SHA-256' },
     false,
     ['encrypt'],
@@ -56,7 +60,7 @@ async function importRsaOaepPublicKey(spki: string): Promise<CryptoKey> {
 async function importRsaPssPublicKey(spki: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     'spki',
-    base64UrlToBytes(spki),
+    base64UrlToBuffer(spki),
     { name: 'RSA-PSS', hash: 'SHA-256' },
     false,
     ['verify'],
@@ -66,7 +70,7 @@ async function importRsaPssPublicKey(spki: string): Promise<CryptoKey> {
 async function importEmitterPublicKey(spki: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     'spki',
-    base64UrlToBytes(spki),
+    base64UrlToBuffer(spki),
     { name: 'ECDSA', namedCurve: 'P-256' },
     false,
     ['verify'],
@@ -204,9 +208,9 @@ export async function createSecureEnvelope<T>(
   const serverPublic = await importRsaOaepPublicKey(config.encryptionPublicKeySpki);
 
   const dataKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt']);
-  const rawDataKey = new Uint8Array(await crypto.subtle.exportKey('raw', dataKey));
+  const rawDataKey = await crypto.subtle.exportKey('raw', dataKey);
   const wrappedKey = await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, serverPublic, rawDataKey);
-  rawDataKey.fill(0);
+  new Uint8Array(rawDataKey).fill(0);
 
   const skeleton: SecureEnvelopeV1 = {
     version: SECURE_ENVELOPE_VERSION,
@@ -250,11 +254,11 @@ export async function verifyEnvelopePublicIntegrity(envelope: SecureEnvelopeV1):
   if (new Date(envelope.expiresAt).getTime() <= now) throw new Error('ENVELOPE_EXPIRED');
   if (new Date(envelope.createdAt).getTime() > now + 10 * 60 * 1000) throw new Error('ENVELOPE_FROM_FUTURE');
 
-  const ciphertext = base64UrlToBytes(envelope.ciphertext);
+  const ciphertext = base64UrlToBuffer(envelope.ciphertext);
   const digest = await sha256Base64Url(ciphertext);
   if (digest !== envelope.ciphertextSha256) throw new Error('CIPHERTEXT_DIGEST_MISMATCH');
 
-  const publicSpki = base64UrlToBytes(envelope.emitterPublicKeySpki);
+  const publicSpki = base64UrlToBuffer(envelope.emitterPublicKeySpki);
   const emitterKeyId = await sha256Base64Url(publicSpki);
   if (emitterKeyId !== envelope.emitterKeyId) throw new Error('EMITTER_KEY_ID_MISMATCH');
 
@@ -262,7 +266,7 @@ export async function verifyEnvelopePublicIntegrity(envelope: SecureEnvelopeV1):
   const ok = await crypto.subtle.verify(
     { name: 'ECDSA', hash: 'SHA-256' },
     publicKey,
-    base64UrlToBytes(envelope.signature),
+    base64UrlToBuffer(envelope.signature),
     encoder.encode(signingString(envelope)),
   );
   if (!ok) throw new Error('SIGNATURE_INVALID');
@@ -285,7 +289,7 @@ export async function verifyServerReceipt(
   const ok = await crypto.subtle.verify(
     { name: 'RSA-PSS', saltLength: 32 },
     publicKey,
-    base64UrlToBytes(receipt.serverSignature),
+    base64UrlToBuffer(receipt.serverSignature),
     encoder.encode(receiptSigningString(receipt)),
   );
   if (!ok) throw new Error('RECEIPT_SIGNATURE_INVALID');
