@@ -1,0 +1,63 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+
+const root = path.resolve(__dirname, '../../..');
+const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
+
+const migration = read('apps/api/migrations/006_safe_reunification.sql');
+const service = read('apps/api/src/reunification/reunification.service.ts');
+const controller = read('apps/api/src/reunification/reunification.controller.ts');
+const authService = read('apps/api/src/auth/auth.service.ts');
+const authDto = read('apps/api/src/auth/dto.ts');
+const otpUi = read('apps/web/app/components/OtpLogin.tsx');
+const notifier = read('apps/web/app/components/ReunificationNotifier.tsx');
+
+test('target phone is represented by keyed lookup token, never a plaintext column', () => {
+  assert.match(migration, /target_lookup_token text NOT NULL/);
+  assert.match(service, /createHmac\('sha256'/);
+  assert.match(service, /REUNIFICATION_LOOKUP_SECRET_B64URL/);
+  assert.doesNotMatch(migration, /target_(?:phone|phone_e164)|searched_(?:phone|phone_e164)/i);
+});
+
+test('seeker API never exposes target presence or target activity state', () => {
+  assert.match(service, /return \{ status: 'REQUEST_ACCEPTED', requestId \}/);
+  assert.match(service, /return \{ status: 'WITHDRAW_REQUESTED' \}/);
+  for (const forbidden of ['targetExists', 'matched:', 'delivered:', 'opened:', 'lastSeen:', 'online:', 'targetAuthSubject']) {
+    assert.equal(service.includes(forbidden), false, `forbidden seeker-visible signal found: ${forbidden}`);
+  }
+  assert.doesNotMatch(controller, /@Get\(['"]search/);
+  assert.doesNotMatch(controller, /@Get\(['"][^'"]*phone/);
+});
+
+test('target contact is explicit reveal, not included in inbox listing', () => {
+  assert.match(service, /ReunificationTargetAction\.REVEAL_CONTACT/);
+  assert.match(service, /contactPhone: seeker\.rows\[0\]\.phone_e164/);
+  const inboxMap = service.slice(service.indexOf('return result.rows.map'), service.indexOf('async inboxSummary'));
+  assert.equal(inboxMap.includes('phone_e164'), false, 'inbox list must not contain seeker phone before explicit reveal');
+});
+
+test('block and abuse decisions are one-way and never notify seeker', () => {
+  assert.match(migration, /reunification_blocks/);
+  assert.match(service, /REUNIFICATION_SEEKER_BLOCKED/);
+  assert.match(service, /REUNIFICATION_ABUSE_REPORTED/);
+  assert.match(service, /status='ABUSE_REVIEW'/);
+  assert.equal(service.includes('notifySeeker'), false);
+});
+
+test('citizen OTP uses opaque challenge and does not expose account lifecycle flow', () => {
+  assert.match(authDto, /challengeId!: string/);
+  assert.doesNotMatch(authDto, /VerifyOtpDto[\s\S]*phone!:/);
+  assert.match(authService, /return \{ status: 'OTP_SENT', challengeId, expiresIn: 600 \}/);
+  assert.match(authService, /flow: OtpFlow \| 'DENY'/);
+  assert.match(otpUi, /JSON\.stringify\(\{challengeId,code\}\)/);
+  assert.equal(otpUi.includes('j.flow'), false, 'browser must not receive Cognito account-state flow');
+  assert.equal(otpUi.includes('j.session'), false, 'browser must not receive raw provider session');
+});
+
+test('global notice is neutral and contains no seeker identity', () => {
+  assert.match(notifier, /mensajes privados de reencuentro/i);
+  assert.equal(notifier.includes('seekerDisplayName'), false);
+  assert.equal(notifier.includes('contactPhone'), false);
+});
