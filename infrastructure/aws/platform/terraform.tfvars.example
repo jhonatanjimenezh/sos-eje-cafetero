@@ -27,14 +27,20 @@ route53_zone_id = ""
 alarm_email = ""
 
 # Evidencia sensible. En producción reemplazar * por el dominio exacto.
-evidence_cors_origins              = ["*"]
-evidence_retention_days            = 90
+evidence_cors_origins               = ["*"]
+evidence_retention_days             = 90
 enable_guardduty_malware_protection = true
-require_malware_scan               = true
+require_malware_scan                = true
 
 # Liveness es una señal antifraude, nunca la decisión final de ayuda.
 liveness_provider             = "REKOGNITION"
 liveness_max_attempts_per_24h = 3
+
+# SecureEnvelope. Mensajes estructurados pequeños: no fotos/videos en relay V1.
+sync_max_envelope_ttl_seconds   = 259200
+sync_max_ciphertext_bytes       = 12288
+sync_max_batch_size             = 4
+sync_batch_requests_per_minute  = 30
 
 # Safe mode: habilitar una capacidad solo después de superar su gate.
 feature_affected_identity   = false
@@ -43,3 +49,4 @@ feature_assistance_matching = false
 feature_whatsapp            = false
 feature_operational_layers  = false
 feature_secure_envelope     = false
+feature_webrtc_relay        = false
