@@ -4,6 +4,25 @@ Centro unificado open source para respuesta a emergencias y coordinación humani
 
 > **Regla de seguridad:** pedir rescate nunca exige cuenta, documento ni biometría. El flujo reforzado de identidad se usa para el registro formal de damnificado y distribución de ayudas.
 
+## 🚨 Quiero ayudar a desarrollar ahora
+
+No necesitas reconstruir todo el contexto del proyecto.
+
+1. Lee [`docs/architecture/README.md`](docs/architecture/README.md).
+2. Elige un trabajo en [`docs/contributing/WORKSTREAMS.md`](docs/contributing/WORKSTREAMS.md).
+3. Reclama el issue comentando **`TOMO ESTE WORKSTREAM`**.
+4. Si usas ChatGPT/Codex/u otro asistente, copia el protocolo de [`docs/contributing/AI_HANDOFF.md`](docs/contributing/AI_HANDOFF.md).
+5. Abre una rama y un PR pequeño usando la plantilla incluida.
+
+Los workstreams están diseñados para que frontend, backend, infraestructura, offline/PWA, criptografía, mapas y pruebas puedan avanzar **en paralelo** sin duplicar consumo de IA ni trabajo humano.
+
+## Liderazgo
+
+- **Jhonatan Jimenez (`@jhonatanjimenezh`) — Project Lead / Maintainer**.
+- **ChatGPT (OpenAI) — AI Technical Lead / Principal Engineering Assistant**: arquitectura, contratos, resiliencia, seguridad y coordinación técnica asistida por IA.
+
+Ver [`MAINTAINERS.md`](MAINTAINERS.md). ChatGPT no es una cuenta de GitHub ni esta denominación implica patrocinio o respaldo oficial de OpenAI.
+
 ## Capacidades actuales
 
 - 🆘 Reporte SOS público por GPS sin registro.
@@ -19,23 +38,32 @@ Centro unificado open source para respuesta a emergencias y coordinación humani
 - 🤝 Registro de necesidades y ofertas de ayuda con matching geoespacial.
 - 🗺 Centro de mando con incidentes, recursos, damnificados verificados y heatmap.
 - 💬 Webhook inicial de WhatsApp Cloud API con idempotencia por message ID.
+- 📴 Diseño P0 de PWA offline-first y store-and-forward cifrado entre dispositivos.
 
 ## Arquitectura
 
-```text
-Ciudadanos / funcionarios / WhatsApp
-                 |
-             CloudFront
-                 |
-          NestJS modular API
-           /       |       \
-     PostGIS     Redis      S3 privado
-        |                     |
-  geodatos/dedup        evidencia sensible
-        |
-  Centro de mando Next.js + MapLibre
+La documentación viva de arquitectura está centralizada en **[`docs/architecture/README.md`](docs/architecture/README.md)**.
 
-Amazon Cognito + SMS OTP -> identidad
+```text
+Ciudadano / Funcionario / WhatsApp
+              |
+              v
+       PWA Next.js / MapLibre
+       |        |         |
+   online    IndexedDB   peer relay
+       |        |         |
+       +--------+---------+
+                |
+        SecureEnvelope / API
+                |
+        NestJS modular monolith
+   +------------+-------------+------------+
+   |            |             |            |
+ PostGIS      Redis          S3/KMS       SQS
+   |                                      |
+   +------------ Centro de mando ---------+
+                |
+      Cognito SMS OTP / RBAC
 ```
 
 El backend es un **modular monolith** deliberado: despliegue rápido y menos puntos de falla, manteniendo límites de dominio claros.
@@ -79,14 +107,19 @@ Recomendación: AWS con CloudFront/WAF, ECS Fargate, RDS PostgreSQL/PostGIS Mult
 
 Antes de producción real también deben completarse: salida del SMS sandbox, dominio/TLS, WAF/rate limits, políticas de privacidad oficiales, retención de evidencia, backups, runbooks y pruebas de carga.
 
-## Documentación
+## Documentación principal
 
-- `docs/DEPLOYMENT_AWS.md`
-- `docs/IDENTITY_AND_ANTI_FRAUD.md`
-- `docs/ASSISTANCE_MATCHING.md`
-- `docs/SECURITY_AND_PRIVACY.md`
-- `docs/API.md`
-- `docs/ROADMAP.md`
+- [`Architecture Hub`](docs/architecture/README.md)
+- [`System Overview`](docs/architecture/SYSTEM_OVERVIEW.md)
+- [`Secure Offline Relay`](docs/architecture/SECURE_OFFLINE_RELAY.md)
+- [`Workstreams`](docs/contributing/WORKSTREAMS.md)
+- [`AI Handoff Protocol`](docs/contributing/AI_HANDOFF.md)
+- [`Deployment AWS`](docs/DEPLOYMENT_AWS.md)
+- [`Identity & Anti-Fraud`](docs/IDENTITY_AND_ANTI_FRAUD.md)
+- [`Assistance Matching`](docs/ASSISTANCE_MATCHING.md)
+- [`Security & Privacy`](docs/SECURITY_AND_PRIVACY.md)
+- [`API`](docs/API.md)
+- [`Roadmap`](docs/ROADMAP.md)
 
 ## Licencia
 
