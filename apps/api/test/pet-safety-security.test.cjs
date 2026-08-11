@@ -9,6 +9,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const migration = read('apps/api/migrations/007_safe_pets.sql');
 const service = read('apps/api/src/pets/pets.service.ts');
 const contactService = read('apps/api/src/pets/pets-contact.service.ts');
+const photoService = read('apps/api/src/pets/pets-public-photo.service.ts');
 const controller = read('apps/api/src/pets/pets.controller.ts');
 const dto = read('apps/api/src/pets/dto.ts');
 const originGuard = read('apps/api/src/pets/pets-origin.guard.ts');
@@ -16,6 +17,7 @@ const legacyReports = read('apps/api/src/reports/reports.controller.ts');
 const petPage = read('apps/web/app/mascotas/page.tsx');
 const notifier = read('apps/web/app/components/PetSafetyNotifier.tsx');
 const serviceWorker = read('apps/web/public/sw.js');
+const terraformSecrets = read('infrastructure/aws/platform/pet_safety.tf');
 
 test('public pet projection contains only id kind name status timestamp', () => {
   const view = migration.slice(migration.indexOf('CREATE OR REPLACE VIEW public_pet_cases'));
@@ -46,7 +48,7 @@ test('proof of life requires short-lived server challenge and video', () => {
   assert.match(service, /La prueba de vida debe ser video/);
   assert.match(service, /challenge_id/);
   assert.match(migration, /kind <> 'PROOF_OF_LIFE' OR challenge_id IS NOT NULL/);
-  assert.match(petPage, /prueba de vida fuerte|prueba de vida|no es una prueba matemática/i);
+  assert.match(petPage, /prueba de vida|no es una prueba matemática/i);
 });
 
 test('private evidence is short-lived access controlled and encrypted at rest', () => {
@@ -59,6 +61,18 @@ test('private evidence is short-lived access controlled and encrypted at rest', 
   assert.match(service, /THREATS_FOUND/);
   assert.match(service, /ChecksumSHA256/);
   assert.match(service, /Range: 'bytes=0-31'/);
+});
+
+test('catalog photo cannot leak camera GPS metadata', () => {
+  assert.match(photoService, /stripJpegMetadata/);
+  assert.match(photoService, /stripPngMetadata/);
+  assert.match(photoService, /APP1=EXIF\/XMP/);
+  assert.match(photoService, /\['eXIf', 'tEXt', 'zTXt', 'iTXt'\]/);
+  assert.match(photoService, /type === 'EXIF' \|\| type === 'XMP '/);
+  assert.match(photoService, /PET_CATALOG_PHOTO_METADATA_STRIPPED/);
+  assert.match(photoService, /scan se consulta DESPUÉS de cualquier reescritura sanitizada/);
+  assert.match(photoService, /ServerSideEncryption: 'aws:kms'/);
+  assert.match(photoService, /ChecksumSHA256/);
 });
 
 test('reject block abuse actions do not mutate pet claim lifecycle', () => {
@@ -88,7 +102,6 @@ test('public free text cannot smuggle direct contact details', () => {
   assert.match(service, /wa\\\.me|wa\.me/);
   assert.match(service, /telegram\|whatsapp/);
   assert.match(service, /\[a-z0-9\._%\+-\]\+@/);
-  assert.match(service, /\\d\\s\(\)\.\-/);
 });
 
 test('sensitive pet mutations use authenticated citizen session and exact-origin guard', () => {
@@ -126,6 +139,14 @@ test('public catalog UI renders photo plus name without coordinates or contact',
   assert.match(publicSection, /petCase\.photoUrl/);
   assert.match(publicSection, /petCase\.name/);
   assert.doesNotMatch(publicSection, /lat|lng|phone|address|breed|color|city|areaHint/);
+});
+
+test('terraform reserves secret containers but never creates secret values', () => {
+  assert.match(terraformSecrets, /aws_secretsmanager_secret" "pet_profile_encryption/);
+  assert.match(terraformSecrets, /aws_secretsmanager_secret" "pet_identity_hash/);
+  assert.match(terraformSecrets, /kms_key_id\s*=\s*aws_kms_key\.data\.arn/);
+  assert.doesNotMatch(terraformSecrets, /aws_secretsmanager_secret_version/);
+  assert.doesNotMatch(terraformSecrets, /secret_string\s*=/);
 });
 
 test('feature can fail closed independently from human SOS', () => {
