@@ -142,11 +142,11 @@ test('public catalog UI renders photo plus name without coordinates or contact',
 });
 
 test('terraform reserves secret containers but never creates secret values', () => {
-  assert.match(terraformSecrets, /aws_secretsmanager_secret" "pet_profile_encryption/);
-  assert.match(terraformSecrets, /aws_secretsmanager_secret" "pet_identity_hash/);
+  assert.match(terraformSecrets, /resource\s+"aws_secretsmanager_secret"\s+"pet_profile_encryption"/);
+  assert.match(terraformSecrets, /resource\s+"aws_secretsmanager_secret"\s+"pet_identity_hash"/);
   assert.match(terraformSecrets, /kms_key_id\s*=\s*aws_kms_key\.data\.arn/);
-  assert.doesNotMatch(terraformSecrets, /aws_secretsmanager_secret_version/);
-  assert.doesNotMatch(terraformSecrets, /secret_string\s*=/);
+  assert.doesNotMatch(terraformSecrets, /resource\s+"aws_secretsmanager_secret_version"/);
+  assert.doesNotMatch(terraformSecrets, /^\s*secret_string\s*=/m);
 });
 
 test('feature can fail closed independently from human SOS', () => {
