@@ -68,7 +68,12 @@ jobs:
       - name: Build API
         run: pnpm --filter @sos/api build
       - name: Identity, reunification and pet safety invariants
-        run: node --test apps/api/test/identity-security.test.cjs apps/api/test/reunification-security.test.cjs apps/api/test/pet-safety-security.test.cjs
+        run: >-
+          node --test
+          apps/api/test/identity-security.test.cjs
+          apps/api/test/reunification-security.test.cjs
+          apps/api/test/pet-safety-security.test.cjs
+          apps/api/test/pet-safety-decisions.test.cjs
       - name: Typecheck web
         env:
           NEXT_PUBLIC_FEATURE_LIVENESS: 'false'
