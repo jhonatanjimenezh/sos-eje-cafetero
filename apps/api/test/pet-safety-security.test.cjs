@@ -7,14 +7,18 @@ const root = path.resolve(__dirname, '../../..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
 const migration = read('apps/api/migrations/007_safe_pets.sql');
+const moderationMigration = read('apps/api/migrations/008_pet_catalog_moderation.sql');
 const service = read('apps/api/src/pets/pets.service.ts');
+const catalogService = read('apps/api/src/pets/pets-catalog.service.ts');
 const contactService = read('apps/api/src/pets/pets-contact.service.ts');
 const photoService = read('apps/api/src/pets/pets-public-photo.service.ts');
+const moderationService = read('apps/api/src/pets/pets-photo-moderation.service.ts');
 const controller = read('apps/api/src/pets/pets.controller.ts');
 const dto = read('apps/api/src/pets/dto.ts');
 const originGuard = read('apps/api/src/pets/pets-origin.guard.ts');
 const legacyReports = read('apps/api/src/reports/reports.controller.ts');
 const petPage = read('apps/web/app/mascotas/page.tsx');
+const moderatorPage = read('apps/web/app/command-center/pet-photos/page.tsx');
 const notifier = read('apps/web/app/components/PetSafetyNotifier.tsx');
 const serviceWorker = read('apps/web/public/sw.js');
 const terraformSecrets = read('infrastructure/aws/platform/pet_safety.tf');
@@ -27,9 +31,24 @@ test('public pet projection contains only id kind name status timestamp', () => 
   ]) {
     assert.equal(view.includes(`c.${forbidden}`), false, `public view must not expose ${forbidden}`);
   }
-  assert.match(service, /name: row\.public_name/);
-  assert.match(service, /photoUrl: await this\.publicPhoto/);
-  assert.doesNotMatch(service.slice(service.indexOf('async publicCases'), service.indexOf('async publicCase')), /exact_location|phone_e164|owner_auth_subject/);
+  assert.match(catalogService, /name: row\.public_name/);
+  assert.match(catalogService, /photoUrl: await this\.approvedPhoto/);
+  assert.doesNotMatch(catalogService.slice(catalogService.indexOf('async list'), catalogService.indexOf('async one')), /exact_location|phone_e164|owner_auth_subject/);
+  assert.match(controller, /constructor\(private readonly catalog: PetsCatalogService\)/);
+  assert.match(controller, /return this\.catalog\.list\(kind\)/);
+  assert.match(controller, /return this\.catalog\.one\(publicId\)/);
+});
+
+test('catalog image requires explicit human moderation approval before public URL', () => {
+  assert.match(moderationMigration, /moderation_status text NOT NULL DEFAULT 'PENDING'/);
+  assert.match(moderationMigration, /moderated_by_official_id uuid REFERENCES official_profiles/);
+  assert.match(catalogService, /moderation_status='APPROVED'/);
+  assert.match(moderationService, /PET_CATALOG_MODERATOR_VIEWED_PHOTO/);
+  assert.match(moderationService, /PET_CATALOG_PHOTO_APPROVED/);
+  assert.match(moderationService, /teléfono, dirección, QR/);
+  assert.match(controller, /@UseGuards\(OfficialGuard, PetsOriginGuard\)/);
+  assert.match(moderatorPage, /Acceso oficial requerido/);
+  assert.match(moderatorPage, /audience="OFFICIAL"/);
 });
 
 test('owner personal proof uses OTP identity plus encrypted payload and keyed identifiers', () => {
@@ -119,11 +138,13 @@ test('legacy flat animal report endpoint cannot bypass the safe flow when enable
   assert.match(legacyReports, /migró al flujo seguro \/api\/v1\/pets/);
 });
 
-test('pet private page is network-only and never enters persistent service-worker shell', () => {
+test('pet private pages are network-only and never enter persistent service-worker shell', () => {
   const shellLine = serviceWorker.split('\n').find(line => line.includes('CORE_SHELL')) || '';
   const navLine = serviceWorker.split('\n').find(line => line.includes('PUBLIC_NAVIGATION_PATHS =')) || '';
-  assert.equal(shellLine.includes('/mascotas'), false, '/mascotas must not be in CORE_SHELL');
-  assert.equal(navLine.includes('/mascotas'), false, '/mascotas must not be cacheable navigation');
+  for (const privatePath of ['/mascotas', '/command-center/pet-photos']) {
+    assert.equal(shellLine.includes(privatePath), false, `${privatePath} must not be in CORE_SHELL`);
+    assert.equal(navLine.includes(privatePath), false, `${privatePath} must not be cacheable navigation`);
+  }
   assert.match(serviceWorker, /if \(!PUBLIC_NAVIGATION_PATHS\.has\(url\.pathname\)\) return/);
 });
 
