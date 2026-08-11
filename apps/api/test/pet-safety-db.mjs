@@ -77,7 +77,7 @@ try {
     ORDER BY ordinal_position
   `);
   const actualPublic = viewColumns.rows.map(row => row.column_name);
-  const expectedPublic = ['public_id','kind','public_name','status','created_at'];
+  const expectedPublic = ['public_id','kind','public_name'];
   if (JSON.stringify(actualPublic) !== JSON.stringify(expectedPublic)) {
     throw new Error(`public_pet_cases exposes unexpected columns: ${actualPublic.join(',')}`);
   }
@@ -142,12 +142,12 @@ try {
 
   const publicRow = await db.query('SELECT row_to_json(v)::text row_text FROM public_pet_cases v WHERE public_id=$1', [lost.rows[0].public_id]);
   const serialized = String(publicRow.rows[0].row_text);
-  for (const forbidden of ['+573001110001', '-75.52', '5.06', 'synthetic-hmac']) {
-    if (serialized.includes(forbidden)) throw new Error(`public projection leaked sensitive value: ${forbidden}`);
+  for (const forbidden of ['+573001110001', '-75.52', '5.06', 'synthetic-hmac', 'OPEN', 'MATCH_REVIEW']) {
+    if (serialized.includes(forbidden)) throw new Error(`public projection leaked sensitive or operational value: ${forbidden}`);
   }
 
   await db.query('ROLLBACK');
-  console.log('pet safety DB invariants passed: private owner data, minimal public view, moderated photos, FOUND without prior report, stable claim lifecycle');
+  console.log('pet safety DB invariants passed: private owner data, minimal public view, no match-status oracle, moderated photos, FOUND without prior report, stable claim lifecycle');
 } catch (error) {
   try { await db.query('ROLLBACK'); } catch {}
   throw error;
