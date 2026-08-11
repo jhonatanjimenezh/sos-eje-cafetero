@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, GoneException, Inject, Post, UseGuards } from '@nestjs/common';
 import { Pool } from 'pg';
 import { OfficialGuard } from '../auth/official.guard';
 import { PG_POOL } from '../database/database.module';
@@ -20,6 +20,12 @@ export class ReportsController {
   }
 
   @Post('animals') async animal(@Body() b:any){
+    // Nunca mantener dos fronteras de seguridad para el mismo dominio. Cuando
+    // Mascotas Seguras está activo, el endpoint legacy queda cerrado para que nadie
+    // pueda saltarse OTP, prueba privada, consentimiento o almacenamiento seguro.
+    if (process.env.FEATURE_PET_SAFETY === 'true') {
+      throw new GoneException('El registro de mascotas migró al flujo seguro /api/v1/pets');
+    }
     const dup=await this.db.query(`SELECT id,public_id,
       CASE WHEN $4::float IS NULL OR last_seen_location IS NULL THEN NULL ELSE ST_Distance(last_seen_location,ST_SetSRID(ST_MakePoint($5,$4),4326)::geography) END meters,
       similarity(lower(coalesce(name,'')),lower(coalesce($2,''))) name_similarity

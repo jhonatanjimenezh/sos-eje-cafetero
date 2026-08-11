@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './globals.css';
 import PwaBootstrap from './components/PwaBootstrap';
 import ReunificationNotifier from './components/ReunificationNotifier';
+import PetSafetyNotifier from './components/PetSafetyNotifier';
 
 export const metadata: Metadata = {
   title: 'SOS Eje Cafetero',
@@ -18,6 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <PwaBootstrap />
         <ReunificationNotifier />
+        <PetSafetyNotifier />
         {children}
       </body>
     </html>
