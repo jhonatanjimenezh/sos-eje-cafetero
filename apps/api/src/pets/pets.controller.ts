@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { OfficialGuard } from '../auth/official.guard';
 import {
   CompletePetMediaDto,
   CreatePetCaseDto,
@@ -10,23 +11,26 @@ import {
   PresignPetCasePhotoDto,
   PresignPetClaimEvidenceDto,
 } from './dto';
+import { PetPhotoModerationDto } from './moderation.dto';
+import { PetsCatalogService } from './pets-catalog.service';
 import { PetsContactService } from './pets-contact.service';
 import { PetsOriginGuard } from './pets-origin.guard';
+import { PetsPhotoModerationService } from './pets-photo-moderation.service';
 import { PetsPublicPhotoService } from './pets-public-photo.service';
 import { PetsService } from './pets.service';
 
 @Controller('pets')
 export class PublicPetsController {
-  constructor(private readonly service: PetsService) {}
+  constructor(private readonly catalog: PetsCatalogService) {}
 
   @Get('cases')
   list(@Query('kind') kind?: string) {
-    return this.service.publicCases(kind);
+    return this.catalog.list(kind);
   }
 
   @Get('cases/:publicId/public')
   one(@Param('publicId') publicId: string) {
-    return this.service.publicCase(publicId);
+    return this.catalog.one(publicId);
   }
 }
 
@@ -170,5 +174,36 @@ export class PrivatePetsController {
   @Get('finder/inbox/:claimId/owner-contact')
   foundClaimOwnerContact(@Req() req: any, @Param('claimId') claimId: string) {
     return this.service.foundClaimOwnerContact(String(req.auth.sub), claimId);
+  }
+}
+
+@Controller('pets/moderation')
+@UseGuards(OfficialGuard, PetsOriginGuard)
+export class PetPhotoModerationController {
+  constructor(private readonly moderation: PetsPhotoModerationService) {}
+
+  @Get('photos')
+  queue() {
+    return this.moderation.queue();
+  }
+
+  @Get('photos/:assetId')
+  view(@Req() req: any, @Param('assetId') assetId: string) {
+    return this.moderation.view(String(req.auth.sub), String(req.official.id), assetId);
+  }
+
+  @Post('photos/:assetId')
+  decide(
+    @Req() req: any,
+    @Param('assetId') assetId: string,
+    @Body() dto: PetPhotoModerationDto,
+  ) {
+    return this.moderation.decide(
+      String(req.auth.sub),
+      String(req.official.id),
+      assetId,
+      dto.decision,
+      dto.reason,
+    );
   }
 }
