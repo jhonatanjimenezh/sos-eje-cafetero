@@ -59,6 +59,11 @@ try {
     if (profileColumns.has(forbidden)) throw new Error(`plaintext pet owner field forbidden: ${forbidden}`);
   }
 
+  const mediaColumns = byTable.get('pet_case_media');
+  for (const required of ['moderation_status','moderated_by_official_id','moderated_at']) {
+    if (!mediaColumns.has(required)) throw new Error(`missing pet_case_media.${required}`);
+  }
+
   for (const table of ['pet_cases','pet_claims','pet_claim_evidence']) {
     const columns = byTable.get(table);
     for (const forbidden of ['phone','phone_e164','owner_phone','finder_phone']) {
@@ -106,6 +111,19 @@ try {
     RETURNING id`, [finder]);
   if (!found.rowCount) throw new Error('FOUND case without prior LOST/profile should be allowed');
 
+  const media = await db.query(`INSERT INTO pet_case_media(
+    case_id,object_key,content_type,declared_sha256,declared_size_bytes,actual_sha256,actual_size_bytes,upload_status,scan_status,completed_at)
+    VALUES($1,$2,'image/jpeg',$3,128,$3,128,'READY','NO_THREATS_FOUND',now())
+    RETURNING id,moderation_status`, [lost.rows[0].id, `private/pets/test/${crypto.randomUUID()}.jpg`, '0'.repeat(64)]);
+  if (media.rows[0].moderation_status !== 'PENDING') throw new Error('catalog photo must start moderation PENDING');
+
+  await expectConstraintViolation(
+    'approve_without_official',
+    '23514',
+    () => db.query(`UPDATE pet_case_media SET moderation_status='APPROVED' WHERE id=$1`, [media.rows[0].id]),
+    'catalog photo became APPROVED without moderator identity/timestamp',
+  );
+
   const claim = await db.query(`INSERT INTO pet_claims(case_id,claimant_subject,claimant_role,status)
     VALUES($1,$2,'FINDER','EVIDENCE_READY') RETURNING id,public_id,status`, [lost.rows[0].id, finder]);
   await db.query(`INSERT INTO pet_claim_actions(claim_id,actor_subject,action)
@@ -129,7 +147,7 @@ try {
   }
 
   await db.query('ROLLBACK');
-  console.log('pet safety DB invariants passed: private owner data, minimal public view, FOUND without prior report, stable claim lifecycle');
+  console.log('pet safety DB invariants passed: private owner data, minimal public view, moderated photos, FOUND without prior report, stable claim lifecycle');
 } catch (error) {
   try { await db.query('ROLLBACK'); } catch {}
   throw error;
