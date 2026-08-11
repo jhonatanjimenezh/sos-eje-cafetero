@@ -101,6 +101,7 @@ export class PetsPhotoModerationService {
 
     const client = await this.db.connect();
     let objectKey: string | null = null;
+    let alreadyDecided: string | null = null;
     try {
       await client.query('BEGIN');
       const official = await client.query(`SELECT 1 FROM official_profiles WHERE id=$1 AND auth_subject=$2 AND status='ACTIVE'`, [officialId, actorSubject]);
@@ -112,21 +113,22 @@ export class PetsPhotoModerationService {
       const row = locked.rows[0];
       if (row.upload_status !== 'READY') throw new BadRequestException('La fotografía no está técnicamente lista');
       if (row.moderation_status !== 'PENDING') {
-        return { status: row.moderation_status };
+        alreadyDecided = row.moderation_status;
+        await client.query('COMMIT');
+      } else {
+        const nextStatus = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+        await client.query(`UPDATE pet_case_media SET moderation_status=$2,moderated_by_official_id=$3,
+          moderated_at=now(),moderation_reason=$4 WHERE id=$1`, [assetId, nextStatus, officialId, trimmedReason]);
+        await client.query(`INSERT INTO audit_events(actor_subject,action,entity_type,entity_id,metadata)
+          VALUES($1,$2,'PET_CASE_MEDIA',$3,$4::jsonb)`, [
+          actorSubject,
+          decision === 'APPROVE' ? 'PET_CATALOG_PHOTO_APPROVED' : 'PET_CATALOG_PHOTO_REJECTED_BY_MODERATOR',
+          assetId,
+          JSON.stringify({ reasonProvided: Boolean(trimmedReason) }),
+        ]);
+        objectKey = row.object_key;
+        await client.query('COMMIT');
       }
-
-      const nextStatus = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
-      await client.query(`UPDATE pet_case_media SET moderation_status=$2,moderated_by_official_id=$3,
-        moderated_at=now(),moderation_reason=$4 WHERE id=$1`, [assetId, nextStatus, officialId, trimmedReason]);
-      await client.query(`INSERT INTO audit_events(actor_subject,action,entity_type,entity_id,metadata)
-        VALUES($1,$2,'PET_CASE_MEDIA',$3,$4::jsonb)`, [
-        actorSubject,
-        decision === 'APPROVE' ? 'PET_CATALOG_PHOTO_APPROVED' : 'PET_CATALOG_PHOTO_REJECTED_BY_MODERATOR',
-        assetId,
-        JSON.stringify({ reasonProvided: Boolean(trimmedReason) }),
-      ]);
-      objectKey = row.object_key;
-      await client.query('COMMIT');
     } catch (error) {
       try { await client.query('ROLLBACK'); } catch {}
       throw error;
@@ -134,6 +136,7 @@ export class PetsPhotoModerationService {
       client.release();
     }
 
+    if (alreadyDecided) return { status: alreadyDecided };
     if (decision === 'REJECT' && objectKey) {
       // La DB deja de servir la imagen antes de intentar borrarla. Si S3 falla, el objeto
       // permanece privado e inaccesible desde el catálogo y puede eliminarse por lifecycle.
