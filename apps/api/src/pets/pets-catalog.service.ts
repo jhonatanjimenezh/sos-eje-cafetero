@@ -45,7 +45,7 @@ export class PetsCatalogService {
   async list(kind?: string) {
     this.assertEnabled();
     if (kind && !['LOST', 'FOUND'].includes(kind)) throw new BadRequestException('Tipo de catálogo inválido');
-    const r = await this.db.query(`SELECT id,public_id,kind,public_name,status
+    const r = await this.db.query(`SELECT id,public_id,kind,public_name
       FROM pet_cases
       WHERE status IN ('OPEN','MATCH_REVIEW') AND ($1::text IS NULL OR kind=$1)
       ORDER BY created_at DESC LIMIT 500`, [kind ?? null]);
@@ -53,21 +53,19 @@ export class PetsCatalogService {
       id: row.public_id,
       kind: row.kind,
       name: row.public_name,
-      status: row.status,
       photoUrl: await this.approvedPhoto(row.id),
     })));
   }
 
   async one(publicId: string) {
     this.assertEnabled();
-    const r = await this.db.query(`SELECT id,public_id,kind,public_name,status
+    const r = await this.db.query(`SELECT id,public_id,kind,public_name
       FROM pet_cases WHERE public_id=$1 AND status IN ('OPEN','MATCH_REVIEW')`, [publicId]);
     if (!r.rowCount) throw new NotFoundException('Caso no disponible');
     return {
       id: r.rows[0].public_id,
       kind: r.rows[0].kind,
       name: r.rows[0].public_name,
-      status: r.rows[0].status,
       photoUrl: await this.approvedPhoto(r.rows[0].id),
     };
   }
