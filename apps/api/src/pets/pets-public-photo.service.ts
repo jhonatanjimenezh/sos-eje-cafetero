@@ -14,7 +14,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { CompletePetMediaDto, PresignPetCasePhotoDto } from './dto';
@@ -107,33 +107,58 @@ export class PetsPublicPhotoService {
     return null;
   }
 
-  private hasJpegSensitiveMetadata(bytes: Uint8Array) {
-    if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return true;
+  private stripJpegMetadata(bytes: Uint8Array) {
+    if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+    const parts: Buffer[] = [Buffer.from(bytes.slice(0, 2))];
     let offset = 2;
-    while (offset + 4 <= bytes.length) {
-      if (bytes[offset] !== 0xff) break;
+    while (offset < bytes.length) {
+      if (offset + 1 >= bytes.length || bytes[offset] !== 0xff) {
+        parts.push(Buffer.from(bytes.slice(offset)));
+        break;
+      }
       const marker = bytes[offset + 1];
-      if (marker === 0xda || marker === 0xd9) break;
-      if (marker >= 0xd0 && marker <= 0xd7) { offset += 2; continue; }
+      if (marker === 0xda || marker === 0xd9) {
+        parts.push(Buffer.from(bytes.slice(offset)));
+        break;
+      }
+      if (marker >= 0xd0 && marker <= 0xd7) {
+        parts.push(Buffer.from(bytes.slice(offset, offset + 2)));
+        offset += 2;
+        continue;
+      }
+      if (offset + 4 > bytes.length) return null;
       const length = (bytes[offset + 2] << 8) | bytes[offset + 3];
-      if (length < 2 || offset + 2 + length > bytes.length) break;
-      // APP1=EXIF/XMP, APP13=IPTC, COM=comentarios. No son necesarios para el catálogo.
-      if (marker === 0xe1 || marker === 0xed || marker === 0xfe) return true;
-      offset += 2 + length;
+      const end = offset + 2 + length;
+      if (length < 2 || end > bytes.length) return null;
+      // APP1=EXIF/XMP, APP13=IPTC, COM=comentarios. Se eliminan antes de publicar.
+      if (marker !== 0xe1 && marker !== 0xed && marker !== 0xfe) {
+        parts.push(Buffer.from(bytes.slice(offset, end)));
+      }
+      offset = end;
     }
-    return false;
+    return Buffer.concat(parts);
   }
 
-  private hasPngSensitiveMetadata(bytes: Uint8Array) {
+  private stripPngMetadata(bytes: Uint8Array) {
+    if (bytes.length < 8) return null;
+    const parts: Buffer[] = [Buffer.from(bytes.slice(0, 8))];
     let offset = 8;
+    let sawEnd = false;
     while (offset + 12 <= bytes.length) {
       const length = Buffer.from(bytes.slice(offset, offset + 4)).readUInt32BE(0);
       const type = Buffer.from(bytes.slice(offset + 4, offset + 8)).toString('ascii');
-      if (['eXIf', 'tEXt', 'zTXt', 'iTXt'].includes(type)) return true;
-      offset += 12 + length;
-      if (type === 'IEND') break;
+      const end = offset + 12 + length;
+      if (end > bytes.length) return null;
+      if (!['eXIf', 'tEXt', 'zTXt', 'iTXt'].includes(type)) {
+        parts.push(Buffer.from(bytes.slice(offset, end)));
+      }
+      offset = end;
+      if (type === 'IEND') {
+        sawEnd = true;
+        break;
+      }
     }
-    return false;
+    return sawEnd ? Buffer.concat(parts) : null;
   }
 
   private hasWebpSensitiveMetadata(bytes: Uint8Array) {
@@ -147,11 +172,13 @@ export class PetsPublicPhotoService {
     return false;
   }
 
-  private containsSensitiveMetadata(contentType: string, bytes: Uint8Array) {
-    if (contentType === 'image/jpeg') return this.hasJpegSensitiveMetadata(bytes);
-    if (contentType === 'image/png') return this.hasPngSensitiveMetadata(bytes);
-    if (contentType === 'image/webp') return this.hasWebpSensitiveMetadata(bytes);
-    return true;
+  private sanitizeMetadata(contentType: string, bytes: Uint8Array): Buffer | null {
+    if (contentType === 'image/jpeg') return this.stripJpegMetadata(bytes);
+    if (contentType === 'image/png') return this.stripPngMetadata(bytes);
+    if (contentType === 'image/webp') {
+      return this.hasWebpSensitiveMetadata(bytes) ? null : Buffer.from(bytes);
+    }
+    return null;
   }
 
   private extension(contentType: string) {
@@ -225,18 +252,47 @@ export class PetsPublicPhotoService {
     if (!bytes || !bytes.length) return reject('La fotografía está vacía');
     const detected = this.detectType(bytes);
     if (!detected || detected !== asset.content_type) return reject('El binario no corresponde al tipo de imagen permitido');
-    if (this.containsSensitiveMetadata(detected, bytes)) {
-      return reject('La fotografía contiene metadatos que podrían revelar ubicación o información del dispositivo. Vuelve a cargar una copia sanitizada.');
+
+    const sanitized = this.sanitizeMetadata(detected, bytes);
+    if (!sanitized) {
+      return reject('El formato contiene metadatos que no podemos eliminar con seguridad. Vuelve a cargar una copia JPEG o PNG sanitizada.');
+    }
+    let storedSha256 = dto.sha256.toLowerCase();
+    let storedSize = dto.sizeBytes;
+    const original = Buffer.from(bytes);
+    if (!sanitized.equals(original)) {
+      storedSha256 = createHash('sha256').update(sanitized).digest('hex');
+      storedSize = sanitized.length;
+      const checksum = Buffer.from(storedSha256, 'hex').toString('base64');
+      const encryption = this.encryption();
+      await this.s3.send(new PutObjectCommand({
+        Bucket: bucket,
+        Key: asset.object_key,
+        Body: sanitized,
+        ContentType: detected,
+        ChecksumSHA256: checksum,
+        ...encryption.command,
+      }));
+      await this.audit(subject, 'PET_CATALOG_PHOTO_METADATA_STRIPPED', assetId, {
+        originalSizeBytes: dto.sizeBytes,
+        sanitizedSizeBytes: storedSize,
+      });
     }
 
+    // El scan se consulta DESPUÉS de cualquier reescritura sanitizada para que una
+    // copia modificada por el servidor nunca herede el resultado de malware del objeto anterior.
     const scanStatus = await this.scanStatus(bucket, asset.object_key);
     if (scanStatus === 'THREATS_FOUND') return reject('La fotografía fue bloqueada por seguridad');
     const ready = this.scanReady(scanStatus);
     await this.db.query(`UPDATE pet_case_media SET actual_sha256=$2,actual_size_bytes=$3,scan_status=$4,
       upload_status=$5,completed_at=CASE WHEN $5='READY' THEN now() ELSE completed_at END WHERE id=$1`, [
-      assetId, dto.sha256.toLowerCase(), dto.sizeBytes, scanStatus, ready ? 'READY' : 'PENDING',
+      assetId, storedSha256, storedSize, scanStatus, ready ? 'READY' : 'PENDING',
     ]);
-    await this.audit(subject, 'PET_CATALOG_PHOTO_VALIDATED', assetId, { detectedContentType: detected, malwareScanStatus: scanStatus });
+    await this.audit(subject, 'PET_CATALOG_PHOTO_VALIDATED', assetId, {
+      detectedContentType: detected,
+      malwareScanStatus: scanStatus,
+      metadataStripped: storedSha256 !== dto.sha256.toLowerCase(),
+    });
     return { assetId, status: ready ? 'READY' : 'SCAN_PENDING', malwareScanStatus: scanStatus };
   }
 }
