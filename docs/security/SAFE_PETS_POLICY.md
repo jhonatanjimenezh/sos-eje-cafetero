@@ -8,7 +8,7 @@ Ayudar a reunir mascotas perdidas con sus familias durante una emergencia sin co
 
 La proyección pública V1 contiene únicamente:
 
-- fotografía de catálogo sanitizada;
+- fotografía de catálogo sanitizada y aprobada;
 - nombre de la mascota, o `Sin identificar` para FOUND;
 - LOST / FOUND;
 - estado operativo mínimo.
@@ -59,6 +59,8 @@ Un supuesto propietario:
 
 `REJECT`, `BLOCK` y `REPORT_ABUSE` se almacenan como acciones privadas y no cambian el lifecycle público del claim. No se exponen motivos, read receipts, last seen ni actividad de la contraparte.
 
+Las decisiones de consentimiento, rechazo, bloqueo y abuso se escriben en la misma transacción PostgreSQL que su evento de auditoría. Si la auditoría crítica falla, la decisión no queda parcialmente persistida.
+
 ## Anti-extorsión
 
 - no teléfonos públicos;
@@ -74,7 +76,18 @@ Un supuesto propietario:
 
 ## Fotografías públicas
 
-El bucket permanece privado. La API entrega URLs firmadas de corta duración. Antes de marcar una fotografía `READY`, el servidor valida checksum, tipo real y malware. JPEG/PNG eliminan EXIF/XMP/IPTC/text metadata; WebP con EXIF/XMP se rechaza en V1. Esto evita publicar coordenadas GPS embebidas accidentalmente.
+El bucket permanece privado. La API entrega URLs firmadas de corta duración.
+
+Antes de que una fotografía pueda aparecer en el catálogo debe superar **dos barreras independientes**:
+
+1. validación técnica;
+2. moderación humana oficial.
+
+La validación técnica comprueba checksum, tipo real, cifrado KMS en producción y malware. JPEG/PNG eliminan EXIF/XMP/IPTC/text metadata; WebP con EXIF/XMP se rechaza en V1. Esto evita publicar coordenadas GPS embebidas accidentalmente.
+
+La eliminación de metadatos no detecta datos dibujados dentro de los píxeles. Por eso `pet_case_media.moderation_status` comienza en `PENDING` y el catálogo solo sirve imágenes `APPROVED` por una identidad oficial autenticada. El moderador debe rechazar afiches/capturas o fotografías donde se vea teléfono, dirección, QR, documento, placa, domicilio u otro dato personal innecesario.
+
+La revisión usa una URL privada de 120 segundos y queda auditada. Un rechazo cambia primero el estado en base de datos —por lo que deja de ser servible— y luego intenta eliminar el objeto; si la eliminación falla, el objeto continúa privado.
 
 ## Evidencia privada
 
@@ -89,6 +102,8 @@ El bucket permanece privado. La API entrega URLs firmadas de corta duración. An
 - acceso auditado;
 - retención limitada.
 
+La evidencia privada **no** entra en la cola de moderación del catálogo: solo la contraparte autenticada que participa en el claim puede abrirla mediante enlace temporal.
+
 ## Secretos
 
 `PET_PROFILE_ENCRYPTION_SECRET_B64URL` y `PET_IDENTITY_HASH_SECRET_B64URL` son secretos independientes de 32 bytes. Nunca deben guardarse en Git, Terraform variables/state, issues, logs o capturas.
@@ -97,12 +112,12 @@ Terraform solo crea contenedores Secrets Manager. Su valor se carga por un proce
 
 ## Cache y dispositivos compartidos
 
-`/mascotas` es privada por defecto para Service Worker: no pertenece al shell offline persistente. La notificación global es neutra y nunca contiene nombre de mascota, persona, teléfono o ubicación.
+`/mascotas` y `/command-center/pet-photos` no pertenecen al shell offline persistente del Service Worker. La notificación global es neutra y nunca contiene nombre de mascota, persona, teléfono o ubicación.
 
 ## IA
 
-Una futura IA puede sugerir similitud visual entre LOST/FOUND. Nunca puede decidir por sí sola que una persona es propietaria, liberar un teléfono, revelar ubicación ni ordenar una entrega.
+Una futura IA puede sugerir similitud visual entre LOST/FOUND. Nunca puede decidir por sí sola que una persona es propietaria, liberar un teléfono, revelar ubicación ni ordenar una entrega. Tampoco sustituye la moderación humana previa a publicación en V1.
 
 ## Activación
 
-Merge de código no autoriza uso real. `FEATURE_PET_SAFETY=false` y `NEXT_PUBLIC_FEATURE_PET_SAFETY=false` siguen siendo los defaults. Issue #26 contiene el gate GO/NO-GO físico, OTP, KMS, malware, extorsión, teléfono compartido y entrega segura.
+Merge de código no autoriza uso real. `FEATURE_PET_SAFETY=false` y `NEXT_PUBLIC_FEATURE_PET_SAFETY=false` siguen siendo los defaults. Issue #26 contiene el gate GO/NO-GO físico, OTP, KMS, malware, extorsión, teléfono compartido, moderación y entrega segura.
