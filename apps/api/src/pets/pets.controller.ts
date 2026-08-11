@@ -12,6 +12,7 @@ import {
 } from './dto';
 import { PetsContactService } from './pets-contact.service';
 import { PetsOriginGuard } from './pets-origin.guard';
+import { PetsPublicPhotoService } from './pets-public-photo.service';
 import { PetsService } from './pets.service';
 
 @Controller('pets')
@@ -35,6 +36,7 @@ export class PrivatePetsController {
   constructor(
     private readonly service: PetsService,
     private readonly contacts: PetsContactService,
+    private readonly photos: PetsPublicPhotoService,
   ) {}
 
   @Post('profiles')
@@ -58,7 +60,7 @@ export class PrivatePetsController {
     @Param('publicId') publicId: string,
     @Body() dto: PresignPetCasePhotoDto,
   ) {
-    return this.service.presignCasePhoto(String(req.auth.sub), publicId, dto);
+    return this.photos.presign(String(req.auth.sub), publicId, dto);
   }
 
   @Post('case-photo/:assetId/complete')
@@ -67,7 +69,7 @@ export class PrivatePetsController {
     @Param('assetId') assetId: string,
     @Body() dto: CompletePetMediaDto,
   ) {
-    return this.service.completeCasePhoto(String(req.auth.sub), assetId, dto);
+    return this.photos.complete(String(req.auth.sub), assetId, dto);
   }
 
   @Post('cases/:publicId/claims')
