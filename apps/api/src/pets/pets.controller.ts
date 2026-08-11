@@ -14,6 +14,7 @@ import {
 import { PetPhotoModerationDto } from './moderation.dto';
 import { PetsCatalogService } from './pets-catalog.service';
 import { PetsContactService } from './pets-contact.service';
+import { PetsDecisionService } from './pets-decision.service';
 import { PetsOriginGuard } from './pets-origin.guard';
 import { PetsPhotoModerationService } from './pets-photo-moderation.service';
 import { PetsPublicPhotoService } from './pets-public-photo.service';
@@ -40,6 +41,7 @@ export class PrivatePetsController {
   constructor(
     private readonly service: PetsService,
     private readonly contacts: PetsContactService,
+    private readonly decisions: PetsDecisionService,
     private readonly photos: PetsPublicPhotoService,
   ) {}
 
@@ -134,7 +136,7 @@ export class PrivatePetsController {
     @Param('claimId') claimId: string,
     @Body() dto: PetOwnerActionDto,
   ) {
-    return this.service.ownerAction(String(req.auth.sub), claimId, dto.action);
+    return this.decisions.ownerAction(String(req.auth.sub), claimId, dto.action);
   }
 
   @Get('claims/:claimId/contact')
@@ -163,7 +165,7 @@ export class PrivatePetsController {
     @Param('claimId') claimId: string,
     @Body() dto: PetFinderActionDto,
   ) {
-    return this.service.finderAction(String(req.auth.sub), claimId, dto.action);
+    return this.decisions.finderAction(String(req.auth.sub), claimId, dto.action);
   }
 
   @Get('found-claims/:claimId/finder-contact')
