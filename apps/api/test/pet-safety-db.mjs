@@ -7,6 +7,25 @@ if (!DATABASE_URL) throw new Error('DATABASE_URL required');
 const db = new Client({ connectionString: DATABASE_URL });
 await db.connect();
 
+async function expectConstraintViolation(savepoint, expectedCode, operation, failureMessage) {
+  if (!/^[a-z0-9_]+$/i.test(savepoint)) throw new Error('unsafe savepoint name');
+  await db.query(`SAVEPOINT ${savepoint}`);
+  let rejected = false;
+  try {
+    await operation();
+  } catch (error) {
+    rejected = error?.code === expectedCode;
+    if (!rejected) {
+      await db.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+      await db.query(`RELEASE SAVEPOINT ${savepoint}`);
+      throw error;
+    }
+  }
+  await db.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+  await db.query(`RELEASE SAVEPOINT ${savepoint}`);
+  if (!rejected) throw new Error(failureMessage);
+}
+
 try {
   await db.query('BEGIN');
 
@@ -70,14 +89,13 @@ try {
     VALUES($1,'Synthetic Pet','DOG','UNKNOWN','synthetic-hmac','0001',$2,$3,$4,'test-v1')
     RETURNING id`, [owner, Buffer.from('ciphertext'), crypto.getRandomValues(new Uint8Array(12)), crypto.getRandomValues(new Uint8Array(16))]);
 
-  let lostWithoutProfileRejected = false;
-  try {
-    await db.query(`INSERT INTO pet_cases(created_by_subject,kind,animal_type,public_name)
-      VALUES($1,'LOST','DOG','Synthetic')`, [owner]);
-  } catch (error) {
-    lostWithoutProfileRejected = error?.code === '23514';
-  }
-  if (!lostWithoutProfileRejected) throw new Error('LOST case without private pet profile was not rejected');
+  await expectConstraintViolation(
+    'lost_without_profile',
+    '23514',
+    () => db.query(`INSERT INTO pet_cases(created_by_subject,kind,animal_type,public_name)
+      VALUES($1,'LOST','DOG','Synthetic')`, [owner]),
+    'LOST case without private pet profile was not rejected',
+  );
 
   const lost = await db.query(`INSERT INTO pet_cases(pet_profile_id,created_by_subject,kind,animal_type,public_name,exact_location)
     VALUES($1,$2,'LOST','DOG','Synthetic Pet',ST_SetSRID(ST_MakePoint(-75.52,5.06),4326)::geography)
@@ -97,13 +115,12 @@ try {
   if (afterAction.rows[0].status !== 'EVIDENCE_READY') throw new Error('private owner action changed claimant-visible lifecycle');
   if (afterAction.rows[0].public_id !== claim.rows[0].public_id) throw new Error('private owner action changed claim public id');
 
-  let privateStatusRejected = false;
-  try {
-    await db.query("UPDATE pet_claims SET status='BLOCKED_BY_OWNER' WHERE id=$1", [claim.rows[0].id]);
-  } catch (error) {
-    privateStatusRejected = error?.code === '23514';
-  }
-  if (!privateStatusRejected) throw new Error('pet_claims allows private target-action status');
+  await expectConstraintViolation(
+    'private_claim_status',
+    '23514',
+    () => db.query("UPDATE pet_claims SET status='BLOCKED_BY_OWNER' WHERE id=$1", [claim.rows[0].id]),
+    'pet_claims allows private target-action status',
+  );
 
   const publicRow = await db.query('SELECT row_to_json(v)::text row_text FROM public_pet_cases v WHERE public_id=$1', [lost.rows[0].public_id]);
   const serialized = String(publicRow.rows[0].row_text);
